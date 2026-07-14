@@ -1,0 +1,26 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# Data / Models
+*.pt
+*.onnx
+*.engine
+data/
+runs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+*.log

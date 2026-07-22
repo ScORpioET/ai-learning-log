@@ -23,7 +23,7 @@ def forward_loop(model):
 
 
 
-yolo = YOLO("../model/yolov8n.pt")
+yolo = YOLO("../model/yolov8m.pt")
 model = yolo.model    # ← 這個才是純 nn.Module，可以餵給 mtq.quantize
 model.cuda().eval()
 
@@ -33,14 +33,19 @@ config = mtq.INT8_DEFAULT_CFG
 
 q_model = mtq.quantize(model, config, forward_loop)
 
-
+# ★ 新增：切 Detect head 到 export 模式
+from ultralytics.nn.modules import Detect
+for m in q_model.modules():
+    if isinstance(m, Detect):
+        m.export = True
+        m.format = 'onnx'
 
 dummy = torch.randn(1, 3, 640, 640, device='cuda')
 
 # mtq.print_quant_summary(q_model)
 torch.onnx.export(
     q_model, dummy,
-    '../model/yolov8n_int8_modelopt.onnx',
+    '../model/yolov8m_int8_modelopt.onnx',
     opset_version=17,
     input_names=["images"],
     output_names=["output0"],

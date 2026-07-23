@@ -1,9 +1,3 @@
-"""
-INT8 static PTQ for YOLOv8n.
-- Reads FP32 ONNX
-- Feeds calibration frames from calibration_data/
-- Produces INT8 ONNX with QDQ nodes
-"""
 import os
 import cv2
 import glob
@@ -18,7 +12,7 @@ from onnxruntime.quantization import (
 )
 from onnxruntime.quantization.shape_inference import quant_pre_process
 
-# ---- 這個 preprocess 必須跟 webcam_trt.py 完全一致 ----
+
 def preprocess(frame_bgr):
     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     resized = cv2.resize(frame_rgb, (640, 640))
@@ -52,7 +46,6 @@ class TrafficCalibrationReader(CalibrationDataReader):
         self.iterator = None
 
 
-# ---- 讀 ONNX 拿 input name ----
 MODEL_DIR = os.path.expanduser("~/ai-transition-2026/model")
 FP32_ONNX = os.path.join(MODEL_DIR, "yolov8n_fp32.onnx")
 PRE_PROCESSED = FP32_ONNX.replace(".onnx", "_preprocessed.onnx")
@@ -71,7 +64,7 @@ quant_pre_process(
 )
 print("Pre-processing done.")
 
-# 用 preprocessed model 讀 input name
+
 onnx_model = onnx.load(PRE_PROCESSED)
 input_name = onnx_model.graph.input[0].name
 print(f"Detected input name: {input_name}")
@@ -89,11 +82,11 @@ quantize_static(
     weight_type=QuantType.QInt8,
     calibrate_method=CalibrationMethod.MinMax,
     per_channel=False,
-    op_types_to_quantize=['Conv', 'MatMul'],       # ← 加這行
+    op_types_to_quantize=['Conv', 'MatMul'],    
     extra_options={
         'ActivationSymmetric': True,
         'WeightSymmetric': True,
-        'DedicatedQDQPair': True,                  # ← 也加這個，TRT 友善
+        'DedicatedQDQPair': True,             
     },
 )
 print(f"\n✅ Done. Wrote {INT8_ONNX}")

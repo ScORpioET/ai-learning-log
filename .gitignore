@@ -20,6 +20,7 @@ runs/
 # OS
 .DS_Store
 Thumbs.db
+*.deb
 
 # Env
 .env

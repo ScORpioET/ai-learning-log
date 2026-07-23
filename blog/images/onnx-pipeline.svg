@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 520" font-family="'Helvetica Neue', 'Segoe UI', 'PingFang TC', 'Microsoft JhengHei', sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f2937"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="540" y="42" text-anchor="middle" font-size="20" font-weight="700" fill="#111827">
+    ML 模型從訓練到部署的三個階段
+  </text>
+  <text x="540" y="66" text-anchor="middle" font-size="13" fill="#6b7280">
+    ONNX 是連接「訓練」與「部署」的橋樑
+  </text>
+
+  <!-- ===== Stage 1: Training ===== -->
+  <g>
+    <rect x="40" y="110" width="280" height="340" rx="14" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
+    <rect x="40" y="110" width="280" height="46" rx="14" fill="#3b82f6"/>
+    <text x="180" y="141" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">① 訓練 Training</text>
+
+    <text x="60" y="185" font-size="12" fill="#1e40af" font-weight="600">選一個訓練框架</text>
+
+    <g font-size="14" fill="#111827">
+      <text x="70" y="215">• PyTorch</text>
+      <text x="70" y="240">• TensorFlow</text>
+      <text x="70" y="265">• JAX / Flax</text>
+      <text x="70" y="290">• Keras</text>
+      <text x="70" y="315">• scikit-learn</text>
+    </g>
+
+    <text x="60" y="360" font-size="12" fill="#1e40af" font-weight="600">產物</text>
+    <rect x="70" y="375" width="220" height="52" rx="6" fill="#fff" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="180" y="398" text-anchor="middle" font-size="15" font-weight="600" fill="#1e40af">.pt / .h5 / .pb</text>
+    <text x="180" y="416" text-anchor="middle" font-size="11" fill="#6b7280">框架各自的檔案格式</text>
+  </g>
+
+  <!-- Arrow 1 -->
+  <g>
+    <line x1="330" y1="280" x2="378" y2="280" stroke="#1f2937" stroke-width="2.5" marker-end="url(#arr)"/>
+    <text x="354" y="270" text-anchor="middle" font-size="11" fill="#6b7280" font-style="italic">export</text>
+  </g>
+
+  <!-- ===== Stage 2: ONNX (bridge) ===== -->
+  <g>
+    <rect x="390" y="110" width="280" height="340" rx="14" fill="#faf5ff" stroke="#7c3aed" stroke-width="2.5"/>
+    <rect x="390" y="110" width="280" height="46" rx="14" fill="#7c3aed"/>
+    <text x="530" y="141" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">② 匯出 Interchange</text>
+
+    <text x="410" y="185" font-size="12" fill="#5b21b6" font-weight="600">通用格式：ONNX</text>
+
+    <!-- ONNX big node -->
+    <polygon points="430,220 630,220 665,290 630,360 430,360 395,290"
+             fill="#7c3aed" stroke="#4c1d95" stroke-width="2"/>
+    <text x="530" y="285" text-anchor="middle" font-size="26" font-weight="700" fill="#fff">ONNX</text>
+    <text x="530" y="308" text-anchor="middle" font-size="10" fill="#e0e7ff">Open Neural Network</text>
+    <text x="530" y="322" text-anchor="middle" font-size="10" fill="#e0e7ff">Exchange</text>
+    <text x="530" y="345" text-anchor="middle" font-size="13" font-weight="600" fill="#fbbf24">.onnx</text>
+
+    <text x="410" y="395" font-size="11" fill="#6b7280" font-style="italic">
+      統一的 op set 定義 +
+    </text>
+    <text x="410" y="410" font-size="11" fill="#6b7280" font-style="italic">
+      protobuf 序列化格式
+    </text>
+    <text x="410" y="425" font-size="11" fill="#6b7280" font-style="italic">
+      → 訓練與部署解耦
+    </text>
+  </g>
+
+  <!-- Arrow 2 -->
+  <g>
+    <line x1="680" y1="280" x2="728" y2="280" stroke="#1f2937" stroke-width="2.5" marker-end="url(#arr)"/>
+    <text x="704" y="270" text-anchor="middle" font-size="11" fill="#6b7280" font-style="italic">load</text>
+  </g>
+
+  <!-- ===== Stage 3: Deployment ===== -->
+  <g>
+    <rect x="740" y="110" width="300" height="340" rx="14" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+    <rect x="740" y="110" width="300" height="46" rx="14" fill="#16a34a"/>
+    <text x="890" y="141" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">③ 部署 Deployment</text>
+
+    <text x="760" y="185" font-size="12" fill="#166534" font-weight="600">依硬體選 runtime</text>
+
+    <g font-size="13" fill="#111827">
+      <text x="770" y="212">• ONNX Runtime</text>
+      <text x="905" y="212" font-size="10" fill="#6b7280">— 跨平台</text>
+
+      <text x="770" y="237">• TensorRT</text>
+      <text x="905" y="237" font-size="10" fill="#6b7280">— NVIDIA GPU</text>
+
+      <text x="770" y="262">• OpenVINO</text>
+      <text x="905" y="262" font-size="10" fill="#6b7280">— Intel CPU / iGPU</text>
+
+      <text x="770" y="287">• CoreML</text>
+      <text x="905" y="287" font-size="10" fill="#6b7280">— Apple Silicon</text>
+
+      <text x="770" y="312">• TFLite</text>
+      <text x="905" y="312" font-size="10" fill="#6b7280">— Android / mobile</text>
+
+      <text x="770" y="337">• Rockchip RKNN</text>
+      <text x="905" y="337" font-size="10" fill="#6b7280">— Edge NPU</text>
+    </g>
+
+    <text x="760" y="380" font-size="12" fill="#166534" font-weight="600">產物</text>
+    <rect x="770" y="395" width="240" height="42" rx="6" fill="#fff" stroke="#16a34a" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="890" y="422" text-anchor="middle" font-size="14" font-weight="600" fill="#166534">.engine / .xml / .mlmodel</text>
+  </g>
+
+  <!-- Bottom note -->
+  <text x="540" y="490" text-anchor="middle" font-size="12" fill="#6b7280" font-style="italic">
+    本篇聚焦：PyTorch → ONNX → TensorRT 這一條主流部署路徑
+  </text>
+</svg>

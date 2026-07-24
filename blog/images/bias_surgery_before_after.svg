@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 800" font-family="'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', -apple-system, system-ui, sans-serif">
+  <!-- Background -->
+  <rect width="1600" height="800" fill="#0d1117"/>
+
+  <!-- Title -->
+  <text x="800" y="50" text-anchor="middle" fill="#8b949e" font-size="22" font-weight="500">
+    Bias 反量化前 vs 反量化後
+  </text>
+
+  <!-- ============ LEFT: BEFORE ============ -->
+  <text x="380" y="110" text-anchor="middle" fill="#f85149" font-size="20" font-weight="600">
+    ❌ 反量化前（ORT 產出）
+  </text>
+  <text x="380" y="135" text-anchor="middle" fill="#6e7681" font-size="14" font-style="italic">
+    5 個節點、TRT parser 拒收
+  </text>
+
+  <!-- INT32 bias initializer -->
+  <rect x="80" y="200" width="220" height="80" rx="10" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
+  <text x="190" y="230" text-anchor="middle" fill="#e6edf3" font-size="15" font-weight="600">INT32 bias</text>
+  <text x="190" y="252" text-anchor="middle" fill="#8b949e" font-size="12">initializer</text>
+  <text x="190" y="270" text-anchor="middle" fill="#7ee787" font-size="11" font-family="monospace">name="bias_int32"</text>
+
+  <!-- scale initializer -->
+  <rect x="80" y="320" width="220" height="70" rx="10" fill="#161b22" stroke="#bc8cff" stroke-width="2"/>
+  <text x="190" y="350" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="600">FP32 scale</text>
+  <text x="190" y="370" text-anchor="middle" fill="#8b949e" font-size="12">initializer</text>
+
+  <!-- zp initializer -->
+  <rect x="80" y="430" width="220" height="70" rx="10" fill="#161b22" stroke="#ffa657" stroke-width="2"/>
+  <text x="190" y="460" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="600">INT32 zero_point</text>
+  <text x="190" y="480" text-anchor="middle" fill="#8b949e" font-size="12">initializer</text>
+
+  <!-- DQ node -->
+  <rect x="400" y="300" width="180" height="120" rx="10" fill="#1c2128" stroke="#d29922" stroke-width="3"/>
+  <text x="490" y="340" text-anchor="middle" fill="#e6edf3" font-size="17" font-weight="700">
+    DequantizeLinear
+  </text>
+  <text x="490" y="365" text-anchor="middle" fill="#d29922" font-size="12">
+    (INT32 → FP32)
+  </text>
+  <text x="490" y="395" text-anchor="middle" fill="#7ee787" font-size="11" font-family="monospace">
+    output="bias_dq"
+  </text>
+
+  <!-- Arrows from 3 initializers to DQ -->
+  <line x1="300" y1="240" x2="400" y2="330" stroke="#484f58" stroke-width="2" marker-end="url(#arrow-gray)"/>
+  <line x1="300" y1="355" x2="400" y2="360" stroke="#484f58" stroke-width="2" marker-end="url(#arrow-gray)"/>
+  <line x1="300" y1="465" x2="400" y2="390" stroke="#484f58" stroke-width="2" marker-end="url(#arrow-gray)"/>
+
+  <!-- Conv (BEFORE) -->
+  <rect x="670" y="320" width="180" height="80" rx="10" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="760" y="352" text-anchor="middle" fill="#e6edf3" font-size="17" font-weight="700">Conv</text>
+  <text x="760" y="378" text-anchor="middle" fill="#8b949e" font-size="12" font-family="monospace">input[2]="bias_dq"</text>
+
+  <!-- Arrow DQ -> Conv -->
+  <line x1="580" y1="360" x2="670" y2="360" stroke="#484f58" stroke-width="2" marker-end="url(#arrow-gray)"/>
+
+  <!-- Error tag -->
+  <rect x="670" y="440" width="180" height="60" rx="8" fill="#4c1618" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4"/>
+  <text x="760" y="465" text-anchor="middle" fill="#ff7b72" font-size="13" font-weight="600">
+    ❌ TRT ERROR:
+  </text>
+  <text x="760" y="485" text-anchor="middle" fill="#ff7b72" font-size="11" font-family="monospace">
+    bias type: INT32
+  </text>
+
+  <!-- =========== DIVIDER =========== -->
+  <line x1="900" y1="180" x2="900" y2="620" stroke="#30363d" stroke-width="1" stroke-dasharray="6,4"/>
+
+  <!-- Transform label -->
+  <rect x="820" y="600" width="160" height="60" rx="8" fill="#1c2128" stroke="#bc8cff" stroke-width="2"/>
+  <text x="900" y="625" text-anchor="middle" fill="#d2a8ff" font-size="13" font-weight="600">
+    strip_bias_qdq.py
+  </text>
+  <text x="900" y="645" text-anchor="middle" fill="#8b949e" font-size="11">
+    post-processor 處理
+  </text>
+
+  <!-- ============ RIGHT: AFTER ============ -->
+  <text x="1220" y="110" text-anchor="middle" fill="#3fb950" font-size="20" font-weight="600">
+    ✅ 反量化後
+  </text>
+  <text x="1220" y="135" text-anchor="middle" fill="#6e7681" font-size="14" font-style="italic">
+    2 個節點、TRT parser 過關
+  </text>
+
+  <!-- FP32 bias initializer (AFTER) -->
+  <rect x="960" y="300" width="240" height="120" rx="10" fill="#0f2417" stroke="#3fb950" stroke-width="3"/>
+  <text x="1080" y="340" text-anchor="middle" fill="#e6edf3" font-size="17" font-weight="700">
+    FP32 bias
+  </text>
+  <text x="1080" y="365" text-anchor="middle" fill="#8b949e" font-size="13">
+    initializer
+  </text>
+  <text x="1080" y="395" text-anchor="middle" fill="#7ee787" font-size="11" font-family="monospace">
+    name="bias_dq" ⭐
+  </text>
+
+  <!-- Note about name reuse -->
+  <text x="1080" y="450" text-anchor="middle" fill="#d2a8ff" font-size="12" font-style="italic">
+    ⬆ 繼承原 DQ 節點的 output 名字
+  </text>
+  <text x="1080" y="470" text-anchor="middle" fill="#8b949e" font-size="11">
+    Conv 完全不用改
+  </text>
+
+  <!-- Conv (AFTER) -->
+  <rect x="1320" y="320" width="180" height="80" rx="10" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="1410" y="352" text-anchor="middle" fill="#e6edf3" font-size="17" font-weight="700">Conv</text>
+  <text x="1410" y="378" text-anchor="middle" fill="#8b949e" font-size="12" font-family="monospace">input[2]="bias_dq"</text>
+
+  <!-- Arrow FP32 -> Conv -->
+  <line x1="1200" y1="360" x2="1320" y2="360" stroke="#484f58" stroke-width="2" marker-end="url(#arrow-gray)"/>
+
+  <!-- Success tag -->
+  <rect x="1320" y="440" width="180" height="60" rx="8" fill="#0f2417" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="4"/>
+  <text x="1410" y="465" text-anchor="middle" fill="#56d364" font-size="13" font-weight="600">
+    ✅ TRT 接受
+  </text>
+  <text x="1410" y="485" text-anchor="middle" fill="#56d364" font-size="11" font-family="monospace">
+    bias type: FP32
+  </text>
+
+  <!-- Bottom summary -->
+  <text x="800" y="720" text-anchor="middle" fill="#8b949e" font-size="14">
+    反量化 <tspan fill="#e6edf3" font-family="monospace">FP32 = (INT32 - zp) × scale</tspan> → 刪除 QDQ 節點 → 新 initializer 繼承 output name
+  </text>
+  <text x="800" y="750" text-anchor="middle" fill="#6e7681" font-size="13" font-style="italic">
+    63 個 Conv 的 bias 節點自動處理完，engine build 過關
+  </text>
+
+  <!-- Arrow marker definitions -->
+  <defs>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#484f58"/>
+    </marker>
+  </defs>
+</svg>

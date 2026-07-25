@@ -1,0 +1,17 @@
+Loading /home/jack/ai-transition-2026/model/yolov8m_int8_modelopt_buggy.engine...
+
+Engine tensors:
+  INPUT  images: shape=(1, 3, 640, 640) dtype=float32
+  OUTPUT output0: shape=(1, 84, 8400) dtype=float32
+  OUTPUT onnx::Reshape_1864: shape=(1, 64, 8400) dtype=float32
+  OUTPUT onnx::Sigmoid_2007: shape=(1, 80, 8400) dtype=float32
+  OUTPUT onnx::QuantizeLinear_1491: shape=(1, 192, 80, 80) dtype=float32
+  OUTPUT onnx::QuantizeLinear_1605: shape=(1, 384, 40, 40) dtype=float32
+  OUTPUT onnx::QuantizeLinear_1719: shape=(1, 576, 20, 20) dtype=float32
+
+Warming up (20 iters)...
+Benchmarking 500 iters...
+
+/home/jack/ai-transition-2026/model/yolov8m_int8_modelopt_buggy.engine
+  FPS: 389.8
+  Latency: 2.565 ms

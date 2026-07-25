@@ -1,4 +1,4 @@
-# TensorRT 的採坑日誌：INT8 比 FP32 推理速度慢
+# ORT + TensorRT 的量化採坑日誌：為什麼 model 越大反而越慢
 
 <!-- 目標總長 3500-4500 字，分 3 天寫 -->
 
@@ -129,9 +129,103 @@ FP32 = (INT8 − zero_point) × scale
 
 那為甚麼 bias 的需求是 FP32 呢，這就要講到 Tensor Core。Tensor Core 是 NVIDIA 專為矩陣運算加速的硬體處理單元，其中有一項特性就是混合精度運算 (輸入作為低精度的 INT8，而輸出結果做成 FP32，也稱作 IMMA, Integer Matrix Multiply-Accumulate)。再來回頭看剛剛的公式`output = Σ(W · X) + bias`，會發現輸入就是 INT8(W) * INT8(X)，FP32(output) 作為輸出，剛好完美對上了 IMMA。TensorRT 希望能拿到純正的 FP32 bias 原因是一來量化會把精度給 round 掉，二來是 output 本來就決定會是 FP32，改精度這個動作就有點多此一舉。但是 ORT 在量化的過程就把 bias 變成了 INT32，導致爆出了上述的錯誤。
 
-這篇的解決方案則是撰寫了[strip_bias_qdq.py](https://github.com/ScORpioET/ai-learning-log/blob/main/Day3/strip_bias_qdq.py)，邏輯上就做三件事：找 bias DQ 節點 → 反量化回 FP32 → 剝掉 QDQ 節點、換成 FP32 initializer。完成以後就可以成功把 .ONNX 轉化成 .engine
+這篇的解決方案則是撰寫了[strip_bias_qdq.py](https://github.com/ScORpioET/ai-learning-log/blob/main/Day3/strip_bias_qdq.py)，邏輯上就做三件事：找 bias DQ 節點 → 反量化回 FP32 → 剝掉 QDQ 節點、換成 FP32 initializer。完成以後就可以成功把 .ONNX 轉化成 .engine。
 
 ![bias_surgery_before_after](./images/bias_surgery_before_after.svg)
+
+
+### C. 量化後反而速度更慢
+
+我自寫了一個 Benchmark 來看量化以後的變化。[profile_engine.py](https://github.com/ScORpioET/ai-learning-log/blob/main/Day3/profile_engine.py)，程式的重點就是透過繼承 `trt.IProfiler` 實作 `report_layer_time(layer_name, ms)`，context 每執行一次就會告訴我每個 layer 的耗時。
+
+
+**yolov8n**（RTX 4070, 1280×720 input）
+
+| Benchmark | FP32 | FP16 | INT8 (ORT) |
+|---|---|---|---|
+| Total time (ms, median) | 3.388 | **2.271** | 2.473 |
+| Layer count | 256 | 171 | 162 |
+| QDQ_standalone (count / ms) | 0 / 0 | 0 / 0 | **49 / 0.673** |
+
+**yolov8m**（RTX 4070, 1280×720 input）
+
+| Benchmark | FP32 | FP16 | INT8 (ORT) |
+|---|---|---|---|
+| Total time (ms, median) | 6.326 | **3.622** | **7.640** ⚠️ |
+| Layer count | 328 | 228 | 477 |
+| QDQ_standalone (count / ms) | 0 / 0 | 0 / 0 | **120 / 2.153** |
+
+理論上來講量化完成以後，推論速度應該要快上4倍。這裡分別在較小的 yolov8n 和較大的 yolov8m 進行 Benchmark 的測試。由表格得知雖然 yolov8n 確實比 FP32 還要更加快速，但是速度卻比 FP16 還要慢，而在 yolov8m 的時候還成為速度最慢的。而且量化以後的 Layer 應該都因為 fuse 而層數變更少，但 yolov8m 卻變得更多了。
+
+
+**yolov8m Category breakdown（FP32 vs INT8）**
+
+| Category | FP32 count | FP32 ms | INT8 count | INT8 ms |
+|---|---:|---:|---:|---:|
+| ConvFused | 81 | 4.578 | 166 | 3.280 |
+| QDQ_standalone | 0 | 0 | **120** | **2.153** ⚠️ |
+| Reformatting | 106 | 0.305 | 74 | 0.279 |
+| Activation | 1 | 0.035 | 1 | 0.037 |
+| Other | 140 | 1.408 | 116 | 1.634 |
+| **Total** | **328** | **6.326** | **477** | **7.640** |
+
+由這個表格可知道ConvFused 時間變快了（4.58 → 3.28），但卻憑空冒出了許多獨立的 QDQ 沒有被 fuse 成 kernel 導致多出了 2.1ms 的運算，我們加速的部分全部都被多出了的120個獨立 QDQ 給耗掉了。
+
+```
+Performance can decrease if TensorRT cannot fuse the operations with the surrounding Q/DQ layers, so be conservative when adding Q/DQ nodes and experiment with both accuracy and TensorRT performance in mind.
+
+[TensorRT Quantized Types: Explicit Quantization](https://docs.nvidia.com/deeplearning/tensorrt/latest/inference-library/quantized-types-explicit-quantization.html)
+```
+
+TensorRT 官方 doc 明確警告如果 QDQ 沒有 fuse 將會導致效能的下降。我當時選 ORT 的不外乎就是，*yTorch model 反正要轉 ONNX 給 TensorRT，在 ORT 量化的教學文章也多，做起來也挺省事的。但走到這邊繼續解析和調整 ORT 已經不是理性選擇，與其花時間 理解 TRT 的 fusion 行為、不如換 NVIDIA 官方推薦的量化工具Modelopt。
+
+## Modelopt量化
+
+### Dynamo 查詢錯誤
+
+```
+config = mtq.INT8_DEFAULT_CFG
+q_model = mtq.quantize(model, config, forward_loop)
+# ...
+torch.onnx.export(q_model, dummy, "yolov8m_int8_modelopt.onnx",
+                  opset_version=17, dynamo=False)
+```
+相比 ORT 的 `quantize_static` 需要一大堆參數，Modelopt 就簡單很多了。不過需要注意的事情是 Modelopt 如果使用 Dynamo 的做法會直接報錯。Pytorch 的 Dynamo 有一個叫做 ONNX symbolic registration 的翻譯字典，這個字典用來把我的 model 對照成 ONNX，但 modelopt 在量化的時候會幫我們加一些 custom op，目前的字典看不懂這些 op ，所以在量化的步驟時要把 `dynamo=False`否則會導致 
+
+```
+DispatchError: No ONNX function found for 
+<OpOverload(op='tensorrt.quantize_op', overload='default')>. 
+Failure message: No decompositions registered for the real-valued input
+```
+
+
+### yolov8 冒出了6個 output
+
+
+完成量化後就可以直接測試用 [bench_trt.py](https://github.com/ScORpioET/ai-learning-log/blob/main/Day2/bench_trt.py) 來測試效能。雖然有跑出結果，但在測試途中意外發現 output 竟然多達6個。
+```
+Engine tensors:
+  INPUT  images: shape=(1, 3, 640, 640) dtype=float32
+  OUTPUT output0: shape=(1, 84, 8400) dtype=float32
+  OUTPUT onnx::Reshape_1864: shape=(1, 64, 8400) dtype=float32
+  OUTPUT onnx::Sigmoid_2007: shape=(1, 80, 8400) dtype=float32
+  OUTPUT onnx::QuantizeLinear_1491: shape=(1, 192, 80, 80) dtype=float32
+  OUTPUT onnx::QuantizeLinear_1605: shape=(1, 384, 40, 40) dtype=float32
+  OUTPUT onnx::QuantizeLinear_1719: shape=(1, 576, 20, 20) dtype=float32
+```
+
+yolov8 的 output 理論上只有一個(shape=(1, 84, 8400))，多出來的是 yolov8 的 detect module 在 eval 下， `forward()`回傳的 tensor `(y, preds)`。`y=我們要的output` `preds= head（YOLOv8 的 detection head,負責產出 box 和 class）的原始輸出`。這樣會多出很多我們不需要的資料，輸出會變得很難閱讀也浪費記憶體空間。修法也並不困難， 只要在量化之前將 `forward()` 的回傳 `return y if self.export else (y, preds)` 的 `self.export = True`就好了。
+
+```
+from ultralytics.nn.modules import Detect
+for m in q_model.modules():
+    if isinstance(m, Detect):
+        m.export = True
+```
+
+這樣完成了我們量化程式的最終版本[quantize_modelopt.py](https://github.com/ScORpioET/ai-learning-log/blob/main/Day4/quantize_modelopt.py)。這版本的 output 從6個縮減成正常的1個`OUTPUT output0: shape=(1, 84, 8400) dtype=float32`，且 engine 的結構就會比較乾淨，下游比較可讀的同時記憶體又不會浪費。
+
+
 
 ## 2. 換 toolkit：nvidia-modelopt 的環境地獄
 <!-- Day 2 待寫 600-800 字 -->

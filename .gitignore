@@ -24,4 +24,4 @@ Thumbs.db
 
 # Env
 .env
-*.log
+*.logmodel/

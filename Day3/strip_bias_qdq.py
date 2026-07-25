@@ -106,8 +106,13 @@ def strip_bias_qdq(input_path, output_path):
 
 
 if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python strip_bias_qdq.py <model_base>  e.g. yolov8n, yolov8m")
+        sys.exit(1)
+    MODEL_BASE = sys.argv[1]
     MODEL_DIR = os.path.expanduser("~/ai-transition-2026/model")
-    INPUT = os.path.join(MODEL_DIR, "yolov8n_int8.onnx")
-    OUTPUT = os.path.join(MODEL_DIR, "yolov8n_int8_clean.onnx")
+    INPUT = os.path.join(MODEL_DIR, f"{MODEL_BASE}_int8.onnx")
+    OUTPUT = os.path.join(MODEL_DIR, f"{MODEL_BASE}_int8_clean.onnx")
 
     strip_bias_qdq(INPUT, OUTPUT)

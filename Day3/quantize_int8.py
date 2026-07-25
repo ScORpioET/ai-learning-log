@@ -11,6 +11,7 @@ from onnxruntime.quantization import (
     CalibrationMethod,
 )
 from onnxruntime.quantization.shape_inference import quant_pre_process
+import sys
 
 
 def preprocess(frame_bgr):
@@ -46,10 +47,14 @@ class TrafficCalibrationReader(CalibrationDataReader):
         self.iterator = None
 
 
+if len(sys.argv) < 2:
+    print("Usage: python quantize_int8.py <model_base>  e.g. yolov8n, yolov8m")
+    sys.exit(1)
+MODEL_BASE = sys.argv[1]     # 'yolov8n' or 'yolov8m'
 MODEL_DIR = os.path.expanduser("~/ai-transition-2026/model")
-FP32_ONNX = os.path.join(MODEL_DIR, "yolov8n_fp32.onnx")
+FP32_ONNX = os.path.join(MODEL_DIR, f"{MODEL_BASE}_fp32.onnx")
 PRE_PROCESSED = FP32_ONNX.replace(".onnx", "_preprocessed.onnx")
-INT8_ONNX = os.path.join(MODEL_DIR, "yolov8n_int8.onnx")
+INT8_ONNX = os.path.join(MODEL_DIR, f"{MODEL_BASE}_int8.onnx")
 CALIB_DIR = "calibration_data"
 # ---- Step A: Pre-process（fuse BN、fold constants、shape inference） ----
 from onnxruntime.quantization.shape_inference import quant_pre_process
@@ -86,7 +91,7 @@ quantize_static(
     extra_options={
         'ActivationSymmetric': True,
         'WeightSymmetric': True,
-        'DedicatedQDQPair': True,             
+        'DedicatedQDQPair': False,             
     },
 )
 print(f"\n✅ Done. Wrote {INT8_ONNX}")

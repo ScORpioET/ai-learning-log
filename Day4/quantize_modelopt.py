@@ -38,7 +38,7 @@ from ultralytics.nn.modules import Detect
 for m in q_model.modules():
     if isinstance(m, Detect):
         m.export = True
-        m.format = 'onnx'
+        # m.format = 'onnx'
 
 dummy = torch.randn(1, 3, 640, 640, device='cuda')
 

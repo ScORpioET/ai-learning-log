@@ -65,11 +65,27 @@ stream.synchronize()
 print(f"Benchmarking {N} iters...")
 torch.cuda.synchronize()
 t0 = time.time()
-for _ in range(N):
-    context.execute_async_v3(stream.cuda_stream)
-stream.synchronize()
-elapsed = time.time() - t0
+# 7. Benchmark（多次跑取 median）
+import statistics
+NUM_RUNS = 5
 
+all_fps = []
+all_ms = []
+for run in range(NUM_RUNS):
+    torch.cuda.synchronize()
+    t0 = time.time()
+    for _ in range(N):
+        context.execute_async_v3(stream.cuda_stream)
+    stream.synchronize()
+    elapsed = time.time() - t0
+    fps = N / elapsed
+    latency_ms = elapsed * 1000 / N
+    all_fps.append(fps)
+    all_ms.append(latency_ms)
+    print(f"  Run {run+1}/{NUM_RUNS}: {fps:.1f} FPS ({latency_ms:.3f} ms)")
+
+elapsed = time.time() - t0
 print(f"\n{ENGINE_PATH}")
-print(f"  FPS: {N/elapsed:.1f}")
-print(f"  Latency: {elapsed*1000/N:.3f} ms")
+print(f"  FPS    — median: {statistics.median(all_fps):.1f} | min: {min(all_fps):.1f} | max: {max(all_fps):.1f}")
+print(f"  Latency — median: {statistics.median(all_ms):.3f} ms | min: {min(all_ms):.3f} | max: {max(all_ms):.3f} | range: {max(all_ms)-min(all_ms):.3f} ms")
+print(f"  All runs (ms): {[f'{m:.3f}' for m in all_ms]}")

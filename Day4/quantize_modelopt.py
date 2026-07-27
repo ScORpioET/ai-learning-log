@@ -23,7 +23,7 @@ def forward_loop(model):
 
 
 
-yolo = YOLO("../model/yolov8m.pt")
+yolo = YOLO("../model/yolov8x.pt")
 model = yolo.model    # ← 這個才是純 nn.Module，可以餵給 mtq.quantize
 model.cuda().eval()
 
@@ -45,7 +45,7 @@ dummy = torch.randn(1, 3, 640, 640, device='cuda')
 # mtq.print_quant_summary(q_model)
 torch.onnx.export(
     q_model, dummy,
-    '../model/yolov8m_int8_modelopt.onnx',
+    '../model/yolov8x_int8_modelopt.onnx',
     opset_version=17,
     input_names=["images"],
     output_names=["output0"],

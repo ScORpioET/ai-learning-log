@@ -1,0 +1,113 @@
+
+Loading /home/jack/ai-transition-2026/model/yolov8n_fp32.engine...
+Warmup 20 iterations...
+Profiling 100 iterations...
+
+================================================================================
+Summary: yolov8n_fp32.engine
+================================================================================
+Total layer count: 256
+Total time (sum of layers): 3.492 ms
+
+Category   Count    Time (ms)    % of total  
+---------- -------- ------------ ------------
+Conv       94       1.7136       49.1        
+QDQ        0        0.0000       0.0         
+Other      162      1.7789       50.9        
+
+Top 15 layers by time:
+Layer                                                                  ms         %       
+---------------------------------------------------------------------- ---------- --------
+/model.22/cv2.0/cv2.0.0/conv/Conv || /model.22/cv3.0/cv3.0.0/conv/Co   0.0569     1.63    
+/model.5/conv/Conv                                                     0.0543     1.55    
+/model.1/conv/Conv                                                     0.0440     1.26    
+/model.22/cv3.0/cv3.0.1/conv/Conv                                      0.0420     1.20    
+/model.7/conv/Conv                                                     0.0415     1.19    
+/model.0/conv/Conv                                                     0.0387     1.11    
+/model.3/conv/Conv                                                     0.0377     1.08    
+/model.22/cv2.2/cv2.2.1/conv/Conv                                      0.0373     1.07    
+/model.22/cv2.2/cv2.2.0/conv/Conv || /model.22/cv3.2/cv3.2.0/conv/Co   0.0360     1.03    
+/model.22/dfl/Softmax                                                  0.0360     1.03    
+/model.2/m.0/cv2/conv/Conv                                             0.0350     1.00    
+/model.2/m.0/cv1/conv/Conv                                             0.0348     1.00    
+__myl_MoveNegExpAddDivMul_myl12_0                                      0.0341     0.98    
+/model.2/cv2/conv/Conv                                                 0.0340     0.97    
+/model.22/cv2.1/cv2.1.0/conv/Conv || /model.22/cv3.1/cv3.1.0/conv/Co   0.0335     0.96    
+
+Loading /home/jack/ai-transition-2026/model/yolov8n_fp16.engine...
+Warmup 20 iterations...
+Profiling 100 iterations...
+
+================================================================================
+Summary: yolov8n_fp16.engine
+================================================================================
+Total layer count: 171
+Total time (sum of layers): 2.105 ms
+
+Category   Count    Time (ms)    % of total  
+---------- -------- ------------ ------------
+Conv       81       1.1004       52.3        
+QDQ        0        0.0000       0.0         
+Other      90       1.0049       47.7        
+
+Top 15 layers by time:
+Layer                                                                  ms         %       
+---------------------------------------------------------------------- ---------- --------
+graph_input_cast0                                                      0.0435     2.07    
+/model.22/dfl/Softmax                                                  0.0422     2.01    
+/model.2/m.0/cv2/conv/Conv + PWN(PWN(PWN(/model.2/m.0/cv2/act/Sigmoi   0.0367     1.74    
+/model.3/conv/Conv + PWN(PWN(/model.3/act/Sigmoid), PWN(/model.3/act   0.0308     1.46    
+/model.2/m.0/cv1/conv/Conv + PWN(PWN(/model.2/m.0/cv1/act/Sigmoid),    0.0282     1.34    
+/model.1/conv/Conv + PWN(PWN(/model.1/act/Sigmoid), PWN(/model.1/act   0.0282     1.34    
+/model.2/cv2/conv/Conv + PWN(PWN(/model.2/cv2/act/Sigmoid), PWN(/mod   0.0272     1.29    
+Reformatting CopyNode for Input Tensor 0 to PWN(/model.22/Sub)         0.0269     1.28    
+/model.22/cv3.0/cv3.0.1/conv/Conv + PWN(PWN(/model.22/cv3.0/cv3.0.1/   0.0267     1.27    
+/model.22/cv2.0/cv2.0.0/conv/Conv || /model.22/cv3.0/cv3.0.0/conv/Co   0.0239     1.13    
+/model.22/cv2.1/cv2.1.0/conv/Conv || /model.22/cv3.1/cv3.1.0/conv/Co   0.0237     1.12    
+/model.4/cv2/conv/Conv + PWN(PWN(/model.4/cv2/act/Sigmoid), PWN(/mod   0.0225     1.07    
+/model.2/Split_1                                                       0.0225     1.07    
+/model.4/m.0/cv2/conv/Conv + PWN(PWN(PWN(/model.4/m.0/cv2/act/Sigmoi   0.0224     1.06    
+/model.4/m.1/cv2/conv/Conv + PWN(PWN(PWN(/model.4/m.1/cv2/act/Sigmoi   0.0218     1.03    
+
+Loading /home/jack/ai-transition-2026/model/yolov8n_int8.engine...
+Warmup 20 iterations...
+Profiling 100 iterations...
+
+================================================================================
+Summary: yolov8n_int8.engine
+================================================================================
+Total layer count: 162
+Total time (sum of layers): 3.337 ms
+
+Category   Count    Time (ms)    % of total  
+---------- -------- ------------ ------------
+Conv       0        0.0000       0.0         
+QDQ        118      2.5814       77.4        
+Other      44       0.7559       22.6        
+
+Top 15 layers by time:
+Layer                                                                  ms         %       
+---------------------------------------------------------------------- ---------- --------
+/model.22/dfl/Softmax                                                  0.0426     1.28    
+model.2.cv2.conv.weight_quantized + /model.2/cv2/conv/Conv + PWN(PWN   0.0423     1.27    
+model.4.cv2.conv.weight_quantized + /model.4/cv2/conv/Conv + PWN(PWN   0.0417     1.25    
+model.4.m.1.cv2.conv.weight_quantized + /model.4/m.1/cv2/conv/Conv +   0.0405     1.21    
+model.4.m.0.cv2.conv.weight_quantized + /model.4/m.0/cv2/conv/Conv +   0.0402     1.20    
+model.4.m.0.cv1.conv.weight_quantized + /model.4/m.0/cv1/conv/Conv +   0.0396     1.19    
+model.1.conv.weight_quantized + /model.1/conv/Conv + PWN(PWN(/model.   0.0384     1.15    
+model.4.m.1.cv1.conv.weight_quantized + /model.4/m.1/cv1/conv/Conv +   0.0375     1.12    
+Reformatting CopyNode for Input Tensor 1 to PWN(PWN(/model.2/m.0/cv2   0.0362     1.08    
+model.0.conv.weight_quantized + /model.0/conv/Conv                     0.0360     1.08    
+model.22.cv2.0.0.conv.weight_quantized + /model.22/cv2.0/cv2.0.0/con   0.0353     1.06    
+__myl_ReshTranReshSlic_myl5_0                                          0.0342     1.03    
+Reformatting CopyNode for Input Tensor 0 to model.2.m.0.cv2.conv.wei   0.0338     1.01    
+__myl_CastMulMulTanhMulAddMulMinMaxRounMulMulMulMinMaxRounCastReplCo   0.0334     1.00    
+/model.4/Split_127                                                     0.0332     0.99    
+
+================================================================================
+Cross-engine comparison
+================================================================================
+Engine                                   Layers     Total ms    
+yolov8n_fp32.engine                      256        3.492       
+yolov8n_fp16.engine                      171        2.105       
+yolov8n_int8.engine                      162        3.337       

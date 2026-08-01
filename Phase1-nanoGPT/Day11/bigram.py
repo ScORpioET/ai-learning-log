@@ -152,7 +152,6 @@ class BigramLanguageModel(nn.Module):
     def forward(self, idx, targets=None):
         B, T = idx.shape
 
-
         # idx and targets are both (B,T) tensor of integers
         tok_emb = self.token_embedding_table(idx) # (B,T,C)
         pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T,C)
@@ -175,7 +174,7 @@ class BigramLanguageModel(nn.Module):
         # idx is (B, T) array of indices in the current context
         for _ in range(max_new_tokens):
             # get the predictions
-            idx_cond = idx[:, -block_size:]        # ← 加這行
+            idx_cond = idx[:, -block_size:]        # ←   加這行
             logits, loss = self(idx_cond)
             # focus only on the last time step
             logits = logits[:, -1, :] # becomes (B, C)

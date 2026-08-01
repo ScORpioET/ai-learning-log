@@ -25,3 +25,10 @@ Thumbs.db
 # Env
 .env
 *.logmodel/
+
+
+# 不小心 clone 進來的參考 repo
+reference/
+archive/
+
+test.py

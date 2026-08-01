@@ -2,12 +2,18 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-batch_size = 32
-block_size = 256
-n_embd = 64
-n_head = 4
-n_layer = 4
+batch_size = 64
+block_size = 128
+n_embd = 386
+n_head = 8
+n_layer = 6
 dropout = 0.2 
+max_iters = 5000
+eval_iters = 200
+eval_interval = 500
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
 
 class Head(nn.Module):
 
@@ -26,7 +32,7 @@ class Head(nn.Module):
         k = self.key(x) # (B, T, hs)
         wei = q @ k.transpose(-1, -2) * k.shape[-1] ** -0.5 # (B, T, T)
         mask = self.tril[:T:, :T:] # (B, T, T)
-        wei = wei.masked_fill(mask==0, float='-inf') # (B, T, T)
+        wei = wei.masked_fill(mask==0, float('-inf')) # (B, T, T)
         wei = F.softmax(wei, dim=-1) # (B, T, T)
         wei = self.drop(wei) # (B, T, T)
         v = self.value(x) # (B, T, C)
@@ -101,7 +107,7 @@ class Bigram(nn.Module):
         B, T = x.shape
 
         token_emb = self.token_embedding(x) # (B, T, C)
-        pos_emb = self.position_embedding(torch.arange(T))
+        pos_emb = self.position_embedding(torch.arange(T).to(device))
         emb = token_emb + pos_emb
         x = self.blocks(emb)
         x = self.drop(x)
@@ -129,3 +135,74 @@ class Bigram(nn.Module):
             idx = torch.cat((idx, idx_next), -1)
 
         return idx
+
+
+
+
+if __name__ == '__main__':
+
+    with open('input.txt', 'r') as f:
+        data = f.read()
+
+    vocab = sorted(list(set(data)))
+    vocab_size = len(vocab)
+    stoi = {value:index for index, value in enumerate(vocab)}
+    itos = {index:value for index, value in enumerate(vocab)}
+    encode = lambda x: [stoi[s] for s in x]
+    decode = lambda x: ''.join([itos[s] for s in x])
+
+    n = int(0.9 * len(data))
+    train_data = torch.tensor(encode(data[:n]), dtype=torch.long).to(device)
+    val_data = torch.tensor(encode(data[n:]), dtype=torch.long).to(device)
+
+    def get_batch(split):
+
+        dataset = train_data if split == 'train' else val_data
+
+        ix = torch.randint(0, len(dataset)-block_size, (batch_size,))
+
+        x = torch.stack([dataset[i:i+block_size] for i in ix])
+        y = torch.stack([dataset[i+1:i+block_size+1] for i in ix])
+
+        return x, y
+
+    @torch.no_grad()
+    def estimate_loss():
+        out = {}
+        model.eval()
+        for split in ['train', 'val']:
+            losses = torch.zeros(eval_iters)
+            for i in range(eval_iters):
+                dataset, targets = get_batch(split)
+                logits, loss = model(dataset, targets)
+                losses[i] = loss.item()
+            out[split] = losses.mean()
+            
+        model.train()
+
+        return out
+                
+
+
+    model = Bigram(vocab_size)
+    model.to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=3e-4)
+
+
+    for i in range(max_iters):
+
+        if (i % eval_interval == 0 and i != 0 ) or i == max_iters-1 :
+            losses = estimate_loss()
+            print(f"step {i}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+
+        dataset, targets = get_batch('train')
+
+        logits, loss = model(dataset, targets)
+        opt.zero_grad(set_to_none=True)
+
+        loss.backward()
+        opt.step()
+
+        if i % 1 == 0:
+            print(f"step {i}: loss {loss.item():.4f}")
+

@@ -51,7 +51,6 @@ class Head(nn.Module):
         return out
 
 
-
 class MultiHeadAttention(nn.Module):
 
     def __init__(self, head_size):
@@ -135,7 +134,6 @@ class Bigram(nn.Module):
         return idx
 
 
-
 def get_batch(split):
 
     if split == 'train':
@@ -148,8 +146,6 @@ def get_batch(split):
     y = torch.stack([data[i+1:i+block_size+1] for i in idx])
 
     return x, y
-
-
 
 
 if __name__ == '__main__':

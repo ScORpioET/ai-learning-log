@@ -4,6 +4,8 @@ import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import inspect
+import os
 
 device = 'cpu'
 if torch.cuda.is_available():
@@ -190,21 +192,50 @@ class GPT(nn.Module):
 
         return model
 
+    def configure_optimizers(self, weight_decay, learning_rate, device):
+
+        params_dict = {pn: p for pn, p in self.named_parameters()}
+        params_dict = {pn: p for pn, p in params_dict.items() if p.requires_grad}
+
+        decay_params = [p for n, p in params_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for n, p in params_dict.items() if p.dim() < 2]
+        optim_groups = [
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0},
+        ]
+
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+        print(f'num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters')
+        print(f'num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters')
+
+        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_available and 'cuda' in device
+        print(f'using fused AdamW: {use_fused}')
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
+
+        return optimizer
+
 import tiktoken
 
 class DataLoaderLite:
-    def __init__(self, B, T):
+    def __init__(self, B, T, split):
         self.B = B
-        self.T= T
+        self.T = T
+        assert split in {'train', 'val'}
 
         with open('input.txt', 'r') as f:
             text = f.read()
         enc = tiktoken.get_encoding('gpt2')
-        tokens = enc.encode(text)
-        self.tokens = torch.tensor(tokens)
-        print(f'loaded {len(self.tokens)} tokens')
-        print(f'1 epoch = {len(self.tokens) // (B * T)} batches')
+        tokens = torch.tensor(enc.encode(text))
 
+        n = int(0.9 * len(tokens))
+        self.tokens = tokens[:n] if split == 'train' else tokens[n:]
+
+        print(f'loaded {len(self.tokens)} tokens for {split}')
+        self.current_position = 0
+
+    def reset(self):
         self.current_position = 0
 
     def next_batch(self):
@@ -225,52 +256,138 @@ max_length = 30
 torch.manual_seed(1337)
 if device == 'cuda':
     torch.cuda.manual_seed(1337)
-train_loader = DataLoaderLite(8, 1024)
+
+
+total_batch_size = 524288 #2**19 ~0.5M
+B = 8
+T = 1024
+assert total_batch_size % (B * T) == 0, 'make sure total_batch_size is divisible by B * T'
+grad_accum_steps = total_batch_size // (B * T)
+print(f'total desired batch size: {total_batch_size}')
+print(f'=> calculated gradient accumulation steps: {grad_accum_steps}')
+
+train_loader = DataLoaderLite(B, T, 'train')
+val_loader = DataLoaderLite(B, T, 'val')
 
 torch.set_float32_matmul_precision('high')
+
+enc = tiktoken.get_encoding("gpt2")
 
 model = GPT(GPTConfig(vocab_size=50304))
 model.to(device)
 model = torch.compile(model)
 # logits, loss = model(x, y)
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
-for i in range(500):
+start_step = 0
+ckpt_path = 'checkpoints/model_00050.pt'
+optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
+log_dir = "log"
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, "log.txt")
+if os.path.exists(ckpt_path):
+    checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+    raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
+    raw_model.load_state_dict(checkpoint['model'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+    start_step = checkpoint['step'] + 1
+    print(f'resumed from step {start_step}')
+else:
+    with open(log_file, "w") as f:
+        pass
+
+max_lr = 3e-4
+min_lr = max_lr * 0.1
+warmup_steps = 50
+max_steps = start_step + 1000
+def get_lr(it):
+    if it < warmup_steps:
+        return max_lr * (it+1) / warmup_steps
+    elif it > max_steps:
+        return min_lr
+
+    decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+    return min_lr + coeff * (max_lr - min_lr) 
+
+
+
+
+for step in range(start_step, max_steps):
     t0 = time.time()
-    x, y = train_loader.next_batch()
-    x, y = x.to(device), y.to(device)
+
+    if step > 0 and (step+1) % 100 == 0:
+        model.eval()
+        with torch.no_grad():
+            val_loss_accum = 0.0
+            val_loss_steps = 20
+            for _ in range(val_loss_steps):
+                x, y = val_loader.next_batch()
+                x, y = x.to(device), y.to(device)
+                with torch.autocast(device_type=device, dtype=torch.bfloat16):
+                    logits, loss = model(x, y)
+                loss = loss / val_loss_steps
+                val_loss_accum += loss.detach()
+        print(f'validation loss: {val_loss_accum:.4f}')
+        with open(log_file, "a") as f:
+            f.write(f'{step} val {val_loss_accum.item():.4f}\n')
+        model.train()
+
+        raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
+        checkpoint = {
+            'model': raw_model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'step': step,
+            'val_loss': val_loss_accum.item(),
+            'config': raw_model.config,   # 存架構設定,之後重建模型要用
+        }
+        os.makedirs('checkpoints', exist_ok=True)
+        torch.save(checkpoint, f'checkpoints/model_{step+1:05d}.pt')
+
     optimizer.zero_grad(None)
-    with torch.autocast(device_type=device, dtype=torch.bfloat16):
-        logits, loss = model(x, y)
-    torch.cuda.synchronize(); t_fwd = time.time()
+    loss_accum = 0.0
+    for micro_step in range(grad_accum_steps):
+        x, y = train_loader.next_batch()
+        x, y = x.to(device), y.to(device)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            logits, loss = model(x, y)
+        loss = loss / grad_accum_steps
+        loss_accum += loss.detach()
+        loss.backward()
 
-    loss.backward()
-    torch.cuda.synchronize(); t_bwd = time.time()
-
+    lr = get_lr(step)
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
-    torch.cuda.synchronize(); t_opt = time.time()
+    
     t1 = time.time()
     dt = (t1 - t0)*1000
-    token_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
-    print(f'step {i}, loss: {loss.item()}, dt: {dt}ms, tok/sec: {token_per_sec}')
-    # print(f'step {i}, t_fwd: {(t_fwd - t0)*1000}ms, t_bwd: {(t_bwd - t_fwd)*1000}ms, t_opt: {(t_opt - t_bwd)*1000}ms')
+    token_per_sec = (train_loader.B * train_loader.T * grad_accum_steps) / (t1 - t0)
+    print(f'step {step}, loss: {loss_accum.item():.6f}, norm:{norm:.4f}, dt: {dt}ms, tok/sec: {token_per_sec}')
+    with open(log_file, "a") as f:   # "a" 是 append,接著寫、不會覆蓋前面的
+        f.write(f'{step} train {loss_accum.item():.6f}\n')
 
-import sys; sys.exit(0)
 
-torch.manual_seed(42)
-torch.cuda.manual_seed(42)
-while x.size(1) < max_length:
+num_return_sequences = 4
+max_length = 64
+tokens = enc.encode('We are')
+tokens = torch.tensor(tokens, dtype=torch.long)
+tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
+xgen = tokens.to(device)
+
+while xgen.size(1) < max_length:
     with torch.no_grad():
-        logits, loss = model(x)
-        logits = logits[:, -1, :]
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            logits, loss = model(xgen) # (B, T, vocab_size)
+        logits = logits[:, -1, :] # (B, vocab_size)
         probs = F.softmax(logits, dim=-1)
         topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
-        ix = torch.multinomial(topk_probs, 1)
-        xcol = torch.gather(topk_indices, -1, ix)
-        x = torch.cat((x, xcol), dim=1)
-
+        ix = torch.multinomial(topk_probs, 1) # (B, 1)
+        xcol = torch.gather(topk_indices, -1, ix) # (B, 1)
+        xgen = torch.cat((xgen, xcol), dim=1)
 
 for i in range(num_return_sequences):
-    tokens = x[i, :max_length].tolist()
+    tokens = xgen[i, :max_length].tolist()
     decoded = enc.decode(tokens)
-    print('>', decoded)
+    print(f'sample {i}: {decoded}')

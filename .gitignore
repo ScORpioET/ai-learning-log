@@ -16,6 +16,7 @@ __pycache__/
 *.engine
 data/
 runs/
+model/
 
 # OS
 .DS_Store
@@ -24,11 +25,14 @@ Thumbs.db
 
 # Env
 .env
-*.logmodel/
-
+*.log
 
 # 不小心 clone 進來的參考 repo
 reference/
 archive/
 
-test.pythermal_dataset/
+# 個人測試檔案 / 熱像資料集(太大不進 git)
+test.py
+thermal_dataset/
+FLIR_ADAS_v2.zip
+md5sums_full.txt

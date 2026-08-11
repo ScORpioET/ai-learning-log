@@ -1,0 +1,4 @@
+input_path: input.txt
+B: 8
+T: 1024
+total_batch_size: 524288

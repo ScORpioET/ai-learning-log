@@ -41,5 +41,7 @@ md5sums_full.txt
 outputs/
 multirun/
 
-API_key.txtwandb/
+API_key.txt
+
+wandb/
 wandb/

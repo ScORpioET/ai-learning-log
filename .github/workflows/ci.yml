@@ -36,6 +36,7 @@ jobs:
           run: docker build -t gpt2-train ./Phase1-nanoGPT/Day18
 
         - name: Smoke test container
+          timeout-minutes: 10
           run: |
             docker run --rm gpt2-train python train_gpt2.py \
               train.max_steps_increment=1 train.val_interval=1 train.val_loss_steps=1 \

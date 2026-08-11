@@ -26,17 +26,17 @@ jobs:
       - name: Run pytest
         run: pytest Phase1-nanoGPT/Day20/test_data_utils.py -v
 
-docker-build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+  docker-build:
+      runs-on: ubuntu-latest
+      steps:
+        - name: Checkout code
+          uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t gpt2-train ./Phase1-nanoGPT/Day18
+        - name: Build Docker image
+          run: docker build -t gpt2-train ./Phase1-nanoGPT/Day18
 
-      - name: Smoke test container
-        run: |
-          docker run --rm gpt2-train python train_gpt2.py \
-            train.max_steps_increment=1 train.val_interval=1 train.val_loss_steps=1 \
-            generate.num_return_sequences=1 generate.max_length=10
+        - name: Smoke test container
+          run: |
+            docker run --rm gpt2-train python train_gpt2.py \
+              train.max_steps_increment=1 train.val_interval=1 train.val_loss_steps=1 \
+              generate.num_return_sequences=1 generate.max_length=10

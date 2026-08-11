@@ -14,9 +14,9 @@ __pycache__/
 *.pt
 *.onnx
 *.engine
-data/
+/data/
 runs/
-model/
+/model/
 
 # OS
 .DS_Store
@@ -36,3 +36,7 @@ test.py
 thermal_dataset/
 FLIR_ADAS_v2.zip
 md5sums_full.txt
+
+# Hydra 自動產生的實驗紀錄
+outputs/
+multirun/

@@ -40,3 +40,6 @@ md5sums_full.txt
 # Hydra 自動產生的實驗紀錄
 outputs/
 multirun/
+
+API_key.txtwandb/
+wandb/

@@ -1,6 +1,7 @@
 import os
 import time
 import math
+import wandb
 import torch
 import inspect
 import tiktoken
@@ -10,6 +11,8 @@ import hydra
 from omegaconf import DictConfig
 import torch.nn as nn
 from torch.nn import functional as F
+
+
 
 device = 'cpu'
 if torch.cuda.is_available():
@@ -255,6 +258,11 @@ class DataLoaderLite:
 @hydra.main(version_base=None, config_path="config", config_name="config")
 def train(cfg: DictConfig):
 
+    wandb.init(
+        project="gpt2-nanogpt",
+        config=dict(cfg.train) | dict(cfg.model) | dict(cfg.data),  # 把 Hydra 的超參數整包記錄下來
+    )
+
     seed = cfg.train.seed
     torch.manual_seed(seed)
     if device == 'cuda':
@@ -339,8 +347,9 @@ def train(cfg: DictConfig):
                     loss = loss / val_loss_steps
                     val_loss_accum += loss.detach()
             print(f'validation loss: {val_loss_accum:.4f}')
-            with open(log_file, "a") as f:
-                f.write(f'{step} val {val_loss_accum.item():.4f}\n')
+            wandb.log({"val_loss": val_loss_accum.item(), "step": step})
+            # with open(log_file, "a") as f:
+            #     f.write(f'{step} val {val_loss_accum.item():.4f}\n')
             model.train()
 
             raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
@@ -375,8 +384,9 @@ def train(cfg: DictConfig):
         dt = (t1 - t0)*1000
         token_per_sec = (train_loader.B * train_loader.T * grad_accum_steps) / (t1 - t0)
         print(f'step {step}, loss: {loss_accum.item():.6f}, norm:{norm:.4f}, dt: {dt}ms, tok/sec: {token_per_sec}')
-        with open(log_file, "a") as f:   # "a" 是 append,接著寫、不會覆蓋前面的
-            f.write(f'{step} train {loss_accum.item():.6f}\n')
+        # with open(log_file, "a") as f:   # "a" 是 append,接著寫、不會覆蓋前面的
+        #     f.write(f'{step} train {loss_accum.item():.6f}\n')
+        wandb.log({"train_loss": loss_accum.item(), "step": step})
 
 
     num_return_sequences = cfg.generate.num_return_sequences

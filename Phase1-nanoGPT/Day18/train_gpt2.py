@@ -39,7 +39,7 @@ class CausalSelfAttention(nn.Module):
         self.register_buffer('bias', torch.tril(torch.ones(config.block_size, config.block_size)
                                                 .view(1, 1, config.block_size, config.block_size)))
 
-    def forward(self, x):
+    def forward(self, x, past_key_value=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         # nh is "number of heads", hs is "head size", and C (number of channels) = nh * hs
@@ -50,16 +50,27 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
+        if past_key_value is not None:
+            past_k, past_v = past_key_value
+            k = torch.cat([past_k, k], dim=2)
+            v = torch.cat([past_v, v], dim=2)
+
+        present_key_value = (k, v)
+
         # att = (q @ k.transpose(-2, -1) * (1.0 / math.sqrt(k.size(-1)))) 
         # att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('inf'))
         # att = F.softmax(att, dim=1)
         # y = att @ v 
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True) # flash attention
+        if past_key_value is None:
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=True) # flash attention
+        else:
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=False) # flash attention
+
 
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
         # output projection
         y = self.c_proj(y)
-        return y
+        return y, present_key_value
 
 
 class MLP(nn.Module):
@@ -86,10 +97,11 @@ class Block(nn.Module):
         self.ln_2 = nn.LayerNorm(config.n_embd)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+    def forward(self, x, past_key_value=None):
+        attn_out, present_key_value = self.attn(self.ln_1(x), past_key_value)
+        x = x + attn_out
         x = x + self.mlp(self.ln_2(x))
-        return x
+        return x, present_key_value
 
 @dataclass
 class GPTConfig:
@@ -130,24 +142,37 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, past_key_value=None, use_cache=False):
         # idx is of shape (B, T)
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
+        
+
         # forward the token and posisition embeddings
-        pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
+        if past_key_value is not None:
+            pos = torch.arange(past_key_value[0][0].size()[2], past_key_value[0][0].size()[2]+1, dtype=torch.long, device=idx.device) # shape (T)
+        else:
+            pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (T, n_embd)
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (B, T, n_embd)
         x = tok_emb + pos_emb
         # forward the blocks of the transformer
-        for block in self.transformer.h:
-            x = block(x)
+        if past_key_value is None:
+            past_key_value = [None]*self.config.n_layer
+        for i, block in enumerate(self.transformer.h):
+            x, present_kev_value = block(x, past_key_value[i])
+            past_key_value[i] = present_kev_value
+                
+
         # forward the final layernorm and the classifier
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x) # (B, T, vocab_size)
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+
+        if use_cache:
+            return logits, loss, past_key_value
         return logits, loss
 
     @classmethod
@@ -328,8 +353,6 @@ def train(cfg: DictConfig):
         assert 0 <= decay_ratio <= 1
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
         return min_lr + coeff * (max_lr - min_lr) 
-
-
 
 
     for step in range(start_step, max_steps):

@@ -44,4 +44,5 @@ multirun/
 API_key.txt
 
 wandb/
-wandb/
+*.onnx.data
+*.onnx

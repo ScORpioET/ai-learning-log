@@ -3,4 +3,5 @@
 torch==2.13.0+cu126
 tiktoken==0.13.0
 hydra-core==1.3.5
+wandb==0.28.2
 git+https://github.com/huggingface/transformers.git@42f189ded85d18d00b51161d694cafd325e32b91

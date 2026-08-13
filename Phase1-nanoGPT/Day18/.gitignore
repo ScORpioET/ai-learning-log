@@ -1,0 +1,3 @@
+Phase1-nanoGPT/Day18/onnxruntime_profile__*.json
+Phase1-nanoGPT/Day18/*.onnx
+Phase1-nanoGPT/Day18/*.onnx.data

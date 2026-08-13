@@ -19,9 +19,9 @@ class GPTForExport(nn.Module):
         self.gpt = gpt_model
         self.n_layer = gpt_model.config.n_layer
 
-    def forward(self, idx, *past_kv_flat):
+    def forward(self, idx, past_length, *past_kv_flat):
         past_key_value = [(past_kv_flat[2*i], past_kv_flat[2*i+1]) for i in range(self.n_layer)]
-        logits, _, present_key_value = self.gpt(idx, past_key_value=past_key_value, use_cache=True)
+        logits, _, present_key_value = self.gpt(idx, past_key_value=past_key_value, use_cache=True, past_length=past_length)
 
         present_flat = []
         for k, v in present_key_value:
@@ -40,16 +40,17 @@ head_size = config.n_embd // config.n_head
 
 
 # ---- 3. dummy input，決定 export 當下的固定 shape ----
-idx_dummy = torch.randint(0, config.vocab_size, (B, 1), dtype=torch.long)  # batch=1, seq_len=8
+idx_dummy = torch.randint(0, config.vocab_size, (B, 1), dtype=torch.long)
+past_length_dummy = torch.tensor(0, dtype=torch.long)
 
 past_kv_dummy = []
 for i in range(n_layer):
     past_kv_dummy.append(torch.zeros(B, n_head, 0, head_size))
     past_kv_dummy.append(torch.zeros(B, n_head, 0, head_size))
 
-dummy_input = (idx_dummy, *past_kv_dummy)
+dummy_input = (idx_dummy, past_length_dummy, *past_kv_dummy)
 
-input_names = ['input_ids']
+input_names = ['input_ids', 'past_length']
 output_names = ['logits']
 dynamic_axes = {
     'input_ids': {0: 'batch', 1: 'seq_len'},
@@ -94,28 +95,32 @@ for i in range(n_layer):
     past_kv.append(np.zeros((B, n_head, 0, head_size), dtype=np.float32))
     past_kv.append(np.zeros((B, n_head, 0, head_size), dtype=np.float32))
 
+past_length = 0
 onnx_generated = list(prompt_tokens)
 
-def run_one_step(token_id, past_kv):
-    ort_inputs = {'input_ids': np.array([[token_id]], dtype=np.int64)}
+def run_one_step(token_id, past_kv, past_length):
+    ort_inputs = {
+        'input_ids': np.array([[token_id]], dtype=np.int64),
+        'past_length': np.array(past_length, dtype=np.int64),
+    }
     for i in range(n_layer):
         ort_inputs[f'past_key_{i}'] = past_kv[2*i]
         ort_inputs[f'past_value_{i}'] = past_kv[2*i+1]
     outputs = sess.run(None, ort_inputs)
     logits = outputs[0]
-    new_past_kv = outputs[1:]  # present_key_0, present_value_0, present_key_1, ...
+    new_past_kv = outputs[1:]
     return logits, list(new_past_kv)
 
-# 先把 prompt 逐一餵完，把 cache 建起來
 for tok in prompt_tokens:
-    logits, past_kv = run_one_step(tok, past_kv)
+    logits, past_kv = run_one_step(tok, past_kv, past_length)
+    past_length += 1
 
-# 接著用最後一次的 logits 生成第一個新 token，之後每次都用剛生出來的 token 當下一次輸入
 next_token = int(logits[0, -1, :].argmax())
 onnx_generated.append(next_token)
 
 for _ in range(num_new_tokens - 1):
-    logits, past_kv = run_one_step(next_token, past_kv)
+    logits, past_kv = run_one_step(next_token, past_kv, past_length)
+    past_length += 1
     next_token = int(logits[0, -1, :].argmax())
     onnx_generated.append(next_token)
 

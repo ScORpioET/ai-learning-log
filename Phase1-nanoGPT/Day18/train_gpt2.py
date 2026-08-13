@@ -62,9 +62,9 @@ class CausalSelfAttention(nn.Module):
         # att = F.softmax(att, dim=1)
         # y = att @ v 
         if past_key_value is None:
-            y = F.scaled_dot_product_attention(q, k, v, is_causal=True) # flash attention
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=True, scale=(self.n_embd // self.n_head) ** -0.5) # flash attention
         else:
-            y = F.scaled_dot_product_attention(q, k, v, is_causal=False) # flash attention
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=False, scale=(self.n_embd // self.n_head) ** -0.5) # flash attention
 
 
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
@@ -142,35 +142,28 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, past_key_value=None, use_cache=False):
-        # idx is of shape (B, T)
+    def forward(self, idx, targets=None, past_key_value=None, use_cache=False, past_length=None):
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
-        
 
-        # forward the token and posisition embeddings
         if past_key_value is not None:
-            pos = torch.arange(past_key_value[0][0].size()[2], past_key_value[0][0].size()[2]+1, dtype=torch.long, device=idx.device) # shape (T)
+            pos = past_length + torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
         else:
             pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (T, n_embd)
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (B, T, n_embd)
+        pos_emb = self.transformer.wpe(pos)
+        tok_emb = self.transformer.wte(idx)
         x = tok_emb + pos_emb
-        # forward the blocks of the transformer
         if past_key_value is None:
             past_key_value = [None]*self.config.n_layer
         for i, block in enumerate(self.transformer.h):
             x, present_kev_value = block(x, past_key_value[i])
             past_key_value[i] = present_kev_value
-                
 
-        # forward the final layernorm and the classifier
         x = self.transformer.ln_f(x)
-        logits = self.lm_head(x) # (B, T, vocab_size)
+        logits = self.lm_head(x)
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-
         if use_cache:
             return logits, loss, past_key_value
         return logits, loss

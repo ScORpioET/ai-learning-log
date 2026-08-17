@@ -125,10 +125,7 @@ run_cache_once()
 cache_times = [run_cache_once() for _ in range(num_runs)]
 cache_median = float(np.median(cache_times))
 
-# warm-up
-run_cache_once()
-cache_times = [run_cache_once() for _ in range(num_runs)]
-cache_median = float(np.median(cache_times))
+
 
 print(f"純 PyTorch(無 cache），median 耗時: {pytorch_median:.2f} ms")
 print(f"ONNX 無 cache，       median 耗時: {nocache_median:.2f} ms")

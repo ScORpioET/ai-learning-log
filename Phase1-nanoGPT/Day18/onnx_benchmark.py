@@ -31,15 +31,17 @@ num_runs = 3
 model = GPT(config)
 model.load_state_dict(checkpoint['model'])
 model.eval()
+model = GPT(config).to('cuda')
 
 def run_pytorch_once():
-    seq = torch.tensor([prompt_tokens], dtype=torch.long)
+    seq = torch.tensor([prompt_tokens], dtype=torch.long, device='cuda')
     t0 = time.perf_counter()
     with torch.no_grad():
         for _ in range(num_new_tokens):
             logits, _ = model(seq)
             next_token = logits[0, -1, :].argmax().item()
-            seq = torch.cat([seq, torch.tensor([[next_token]])], dim=1)
+            new_tok = torch.tensor([[next_token]], dtype=torch.long, device='cuda')
+            seq = torch.cat([seq, new_tok], dim=1)
     t1 = time.perf_counter()
     return (t1 - t0) * 1000
 
@@ -48,7 +50,40 @@ run_pytorch_once()
 pytorch_times = [run_pytorch_once() for _ in range(num_runs)]
 pytorch_median = float(np.median(pytorch_times))
 
-# ---------------- 無 cache 版本 ----------------
+# ---------------- 純 PyTorch 有 cache 版本 ----------------
+def run_pytorch_cache_once():
+    """純 PyTorch + 手動維護 KV cache，作為對照組驗證 cache 加速是不是 ONNX-specific"""
+    prompt_ids = torch.tensor([prompt_tokens], dtype=torch.long).to('cuda')
+    past_kv = None
+    past_length = 0
+
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        # Step 1: 餵 prompt 一次到位（多 token 一起進、拿到最後一個位置的 logits）
+        logits, _, past_kv = model(prompt_ids, past_key_value=past_kv, use_cache=True)
+        past_length += prompt_ids.size(1)
+        next_token = logits[0, -1, :].argmax().item()
+
+        # Step 2+: 每步只餵一個新 token
+        for _ in range(num_new_tokens - 1):
+            new_input = torch.tensor([[next_token]], dtype=torch.long).to('cuda')
+            logits, _, past_kv = model(
+                new_input,
+                past_key_value=past_kv,
+                use_cache=True,
+                past_length=past_length,
+            )
+            past_length += 1
+            next_token = logits[0, -1, :].argmax().item()
+    t1 = time.perf_counter()
+    return (t1 - t0) * 1000
+
+# warm-up + median
+run_pytorch_cache_once()
+pytorch_cache_times = [run_pytorch_cache_once() for _ in range(num_runs)]
+pytorch_cache_median = float(np.median(pytorch_cache_times))
+
+# ---------------- ONNX 無 cache 版本 ----------------
 sess_nocache = ort.InferenceSession("gpt2_step_nocache.onnx", providers=providers, sess_options=so)
 
 def run_nocache_once():
@@ -66,7 +101,7 @@ run_nocache_once()
 nocache_times = [run_nocache_once() for _ in range(num_runs)]
 nocache_median = float(np.median(nocache_times))
 
-# ---------------- 有 cache 版本(改用 IOBinding,cache 全程留在 GPU) ----------------
+# ---------------- ONNX 有 cache 版本(改用 IOBinding,cache 全程留在 GPU) ----------------
 sess_cache = ort.InferenceSession("gpt2_step_cache.onnx", providers=providers, sess_options=so)
 
 def run_cache_once():
@@ -127,13 +162,15 @@ cache_median = float(np.median(cache_times))
 
 
 
-print(f"純 PyTorch(無 cache），median 耗時: {pytorch_median:.2f} ms")
-print(f"ONNX 無 cache，       median 耗時: {nocache_median:.2f} ms")
-print(f"ONNX 有 cache，       median 耗時: {cache_median:.2f} ms")
+print(f"純 PyTorch 無 cache: {pytorch_median:.2f} ms")
+print(f"純 PyTorch 有 cache: {pytorch_cache_median:.2f} ms")
+print(f"ONNX 無 cache:       {nocache_median:.2f} ms")
+print(f"ONNX 有 cache:       {cache_median:.2f} ms")
 print()
-print(f"ONNX 無 cache vs 純 PyTorch： {pytorch_median / nocache_median:.2f}x")
-print(f"ONNX 有 cache vs ONNX 無 cache： {nocache_median / cache_median:.2f}x")
-print(f"ONNX 有 cache vs 純 PyTorch： {pytorch_median / cache_median:.2f}x")
+print(f"純 PyTorch cache vs 無 cache:  {pytorch_median / pytorch_cache_median:.2f}x")
+print(f"ONNX cache vs 無 cache:        {nocache_median / cache_median:.2f}x")
+print(f"ONNX 無 cache vs 純 PyTorch 無 cache: {pytorch_median / nocache_median:.2f}x")
+print(f"ONNX 有 cache vs 純 PyTorch 有 cache: {pytorch_cache_median / cache_median:.2f}x")
 
 print(sess_nocache.get_providers())
 print(sess_cache.get_providers())

@@ -49,3 +49,18 @@ wandb/
 
 # ONNX Runtime profiling traces (debug 暫存，不進版控)
 Phase1-nanoGPT/Day18/onnxruntime_profile__*.json
+
+# 調查草稿與原始資料（已整理進 Claude project，不需進版控）
+Phase1-nanoGPT/Day18/trt_cache/
+Phase1-nanoGPT/Day18/*_profile.json
+Phase1-nanoGPT/Day18/*_raw.json
+Phase1-nanoGPT/Day18/ATTENTION_FUSION_FIX_ATTEMPT.md
+Phase1-nanoGPT/Day18/INVESTIGATION_RESULTS.md
+Phase1-nanoGPT/Day18/MEMCPY_EVIDENCE_PACK.md
+Phase1-nanoGPT/Day18/MEMCPY_NOCACHE_COMPARISON.md
+Phase1-nanoGPT/Day18/attention_fusion_fix_attempt.py
+Phase1-nanoGPT/Day18/attention_fusion_fix_attempt_cache.py
+Phase1-nanoGPT/Day18/control_hf_eager.py
+Phase1-nanoGPT/Day18/control_hf_gpt2.py
+Phase1-nanoGPT/Day18/optimize_and_bench.py
+Phase1-nanoGPT/Day18/op_split_overhead_hypothesis.py

@@ -1,4 +1,4 @@
-# 為什麼 GPU 上 KV cache 反而變慢？從 17 個 Memcpy 節點追到 attention scaling 動態計算的因果修復日誌
+# GPT-2 在 ONNX 上做 KV-cache 的一次效能優化的完整記錄
 
 ## 前言
 
@@ -78,7 +78,7 @@ GPU 做一次 forward 時，時間花在哪裡取決於 **算矩陣乘法的時�
 一切看起來是這麼的美好，但是還有一個更根本的問題，那就是為甚麼一開始 cache 的速度是被 no-cache 反超的呢?
 
 
-## 4. Memcpy
+## 4. 修改 Memcpy
 要回答上一節留下的問題，光比較整體的 median 時間沒有用，得往下一層，看 GPU 在算這一步的時候，實際的計算圖長什麼樣子、時間都花在哪些 op 上。
 
 ONNX Runtime 提供了兩個工具可以做到這件事：SessionOptions.enable_profiling，會把每一次 forward 裡每個 node 的執行時間記錄成一份 JSON；還有 SessionOptions.optimized_model_filepath，可以把 ORT 內部優化過（融合、常數折疊之後）的計算圖存成一個新的 ONNX 檔案，直接打開來看每個 node 的型別、輸入輸出。
@@ -104,23 +104,47 @@ MemcpyToHost Memcpy_token_38 <- ['unsqueeze_output_2_CUDAExecutionProvider']
 | position embedding 索引（Gather、Add） | 2 | CPU → GPU |
 | causal mask 切片索引（Unsqueeze → Slice） | 3 | GPU → CPU |
 
-數量最多是在 attention 當中為了 scale 所生成的。GPT-2 預設的有 12 層 layers，這相當是每一層的 attention block 就會有一次的 memcpy。一開始我以為這是 flash attention 的代價，所以我也把 no-cache 版本也拿出來對照。
+數量最多是在 attention 當中為了 scale 所生成的。GPT-2 預設的有 12 層 layers，這相當是每一層的 attention block 就會有一次的 memcpy。這時候我們就來稍微看一下 Attention 的公式和 code 放在一起看：
 
-| 來源 | cache | no-cache |
+$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$$
+
+```python
+y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+```
+
+公式中有用到 sqrt 的地方就是 scale(${\sqrt{d_k}}$) 的部分，在 torch 中 Attention 的計算是只要給定 Q, K, V 就可以自動算出 scale 的值，但問題就恰恰好出現在這裡。雖然在我們眼中 scale 是一個永恆不變的常數，但這個 scale 是透 **q.size(-1)** 算出來的，這個 q tensor 的 shape 是 **(B, T, self.n_head, C // self.n_head)** ，即使**C // self.n_head**(也就是 head_dim)永恆不變，但也會因為 T 是動態生成的常數，而讓 ONNX Runtime 把這個參數判斷成不能 **constant folding (常數摺疊)**。折疊失敗的參數則會留在 CPU 上執行，但算出來的結果馬上就要拿去 GPU 上的 $QK^T$ 相乘，這也是為甚麼會有這麼多的 Memcpy 出現。
+
+改法其實也很簡單，只要告訴 torch 指定的 scale 這樣他就會將其視為靜態參數了。
+
+```python
+y = F.scaled_dot_product_attention(q, k, v, is_causal=True, scale=(self.n_embd // self.n_head) ** -0.5)
+```
+
+經過這個簡單的改動，cache 版本的速度確實有提升，兩個版本之間的差距也從 25.3% 縮小到 16.5%。
+
+| 狀態 | no-cache median | cache median | cache 慢多少 |
+|---|---|---|---|
+| pre-fix | 619.96 ms | 829.47 ms | 25.3% |
+| post-fix | 606.56 ms | 726.50 ms | 16.5% |
+
+
+## 5. constant folding
+修掉 Memcpy 之後，cache 跟 no-cache 的差距從 25.3% 縮小到 16.5%，但還是有差距在裡面，這又是為甚麼呢?
+
+先回顧一下第一章有提到，因為架構的關係，cache 版本一次只能給定一個 token，這也意味著無法像 no-cache 一樣把整段 prompt 塞進去。這次用的 prompt 是 "Hello, I am a language model,"，編碼後長度是 8，這代表 cache 要對 prompt 做 8 次預處理才能開始生成新 token。但這還不是影響最大的。
+
+| 成分 | 貢獻 | 占比 |
 |---|---|---|
-| attention scale（Sqrt） | 12 | 0 |
-| position embedding 索引 | 2 | 0 |
-| causal mask 索引 | 3 | 3 |
-| 序列長度索引 | 0 | 1 |
-| **合計** | **17** | **4** |
+| (a) cache 處理 8 個 prompt 花的時間 | ~50ms | ~30% |
+| (b) cache 生成 99 個新 token，比 no-cache 多花的時間 | ~100-115ms | ~65-70% |
 
-結果 no-cache 根本就沒有這個問題，所以 cache 在 attention 當中硬生生的多出了 14 次的 memcpy，明明只是把改成了 cache 為甚麼會發生這種事情?
 
-## 5. 根因確認：逐行對照程式碼
-（500-800 字）
-- 從命名推論升級到程式碼確認
-- `F.scaled_dot_product_attention` 沒明確傳 `scale` 導致什麼
-- `pos = torch.arange(past_key_value[0][0].size()[2], ...)` 導致什麼
+這個表格可以得知，雖然 (a) 的部分確實花了額外時間，但即便沒有加上 (a)，(b) 還是表明了 cache 在序列 T 較小的時候會花費的比 no-cache 更多時間，這是因為雖然透過了 cache 減少了矩陣的運算，但是也因為必須 concat 而多出了額外的花費，而這個花費在 T 較小的時候花費就是會比 no-cache 還要來的貴。
+
+![alt text](./images/per_step_time_cache_vs_nocache.png)
+
+從圖表中就可以得知在 T 還小的時候都是 cache 花費較多的時間去執行 concat，但之後當 T 增大時，no-cache 不僅會因為必須重新計算 $QK^T$ 這個矩陣，而且還會因為每一步都要再額外生成 causal mask，這兩個成本加起來使得花費的增幅來的比 cache 版本巨大，逐漸變成了 no-cache 比 cache 耗時。
+
 
 ## 6. 修法：把「本來是常數」的用 Python 算好
 （500-800 字）

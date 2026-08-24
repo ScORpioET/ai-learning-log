@@ -64,3 +64,25 @@ Phase1-nanoGPT/Day18/control_hf_eager.py
 Phase1-nanoGPT/Day18/control_hf_gpt2.py
 Phase1-nanoGPT/Day18/optimize_and_bench.py
 Phase1-nanoGPT/Day18/op_split_overhead_hypothesis.py
+# Day18 分析/除錯用 scratch script 與產出(不進 repo)
+Phase1-nanoGPT/Day18/benchmark_prefill_t10.py
+Phase1-nanoGPT/Day18/benchmark_prefill_t100_postfix.py
+Phase1-nanoGPT/Day18/export_prefill.py
+Phase1-nanoGPT/Day18/export_prefill_postfix.py
+Phase1-nanoGPT/Day18/fair_comparison_benchmark_t100.py
+Phase1-nanoGPT/Day18/fair_comparison_export.py
+Phase1-nanoGPT/Day18/iobinding_isolated_benchmark.py
+Phase1-nanoGPT/Day18/per_step_cost_breakdown.py
+Phase1-nanoGPT/Day18/per_step_time_cache_vs_nocache.png
+Phase1-nanoGPT/Day18/per_step_time_sweep.csv
+Phase1-nanoGPT/Day18/per_step_time_sweep.py
+Phase1-nanoGPT/Day18/reconcile_gap.py
+Phase1-nanoGPT/Day18/reconcile_gap_t100_postfix.py
+Phase1-nanoGPT/Day18/reconcile_gap_t_sweep.py
+Phase1-nanoGPT/Day18/stable_reconcile_blog_numbers.py
+Phase1-nanoGPT/Day18/t10_op_comparison.py
+Phase1-nanoGPT/Day18/t_sweep_cache_vs_nocache.png
+Phase1-nanoGPT/Day18/t_sweep_dense.csv
+Phase1-nanoGPT/Day18/t_sweep_dense.py
+Phase1-nanoGPT/Day18/validate_prefill.py
+constant_folding_repro.py

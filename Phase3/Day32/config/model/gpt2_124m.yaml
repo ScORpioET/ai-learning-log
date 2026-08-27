@@ -1,0 +1,6 @@
+block_size: 1024
+vocab_size: 320
+clip_vector_size: 512
+n_layer: 12
+n_head: 12
+n_embd: 768

@@ -5,7 +5,7 @@ warmup_steps: 50
 max_steps_increment: 1000
 val_interval: 100
 val_loss_steps: 20
-ckpt_path: checkpoints/model_00050.pt
+ckpt_path: checkpoints/best_model.pt
 ckpt_dir: checkpoints
 log_dir: log
 seed: 1337

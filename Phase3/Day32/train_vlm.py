@@ -399,7 +399,23 @@ def train(cfg: DictConfig):
     train_dataset = CaptionDataset(train_captions, cfg.data.features_train_path, tokenizer, cfg.data.base_vocab_size)
     val_dataset = CaptionDataset(val_captions, cfg.data.features_val_path, tokenizer, cfg.data.base_vocab_size)
 
-    train_loader = DataLoader(train_dataset, batch_size=B, shuffle=True, collate_fn=collate_fn)
+    # Day36 Task C:低風險改善實驗——重新加權訓練資料的抽樣機率,讓「一句話講兩個
+    # position」的樣本被抽到的頻率提高。動機:Task A 量到 tiny-bbox filter 把 GT
+    # filtered 訓練資料裡的雙 position 句子從 94.7% 砍到 23.8%(far 距離物件被
+    # threshold 全部濾掉,句子從兩子句塌縮成一子句),猜測訓練時故意讓這批僅存
+    # 的雙子句樣本被抽到的機率變高,能部分補償這個訓練訊號流失。
+    # 只調 DataLoader 抽樣權重,不動 dataset 內容、不動模型架構、不動 tokenizer。
+    reweight = getattr(cfg.train, "reweight_multi_position", False)
+    if reweight:
+        multi_weight = getattr(cfg.train, "multi_position_weight", 3.0)
+        weights = [multi_weight if ";" in c["caption"] else 1.0 for c in train_dataset.captions]
+        n_multi = sum(1 for c in train_dataset.captions if ";" in c["caption"])
+        print(f"[info] reweight_multi_position=True: {n_multi}/{len(train_dataset.captions)} 筆雙子句樣本,"
+              f"權重 x{multi_weight}")
+        sampler = torch.utils.data.WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
+        train_loader = DataLoader(train_dataset, batch_size=B, sampler=sampler, collate_fn=collate_fn)
+    else:
+        train_loader = DataLoader(train_dataset, batch_size=B, shuffle=True, collate_fn=collate_fn)
     val_loader = DataLoader(val_dataset, batch_size=B, shuffle=False, collate_fn=collate_fn)
 
     model = GPT(GPTConfig(block_size=cfg.model.block_size, vocab_size=cfg.model.vocab_size,

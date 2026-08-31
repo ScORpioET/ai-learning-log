@@ -80,3 +80,65 @@ bug 造成的,不是 tiny-filter 訓練資料本身有害。**
 Phase 1 全部保留(沒有 revert 的理由,兩個 bug 都確認修好、對照乾淨),詳見
 `task_a_recall_gap_analysis.md`(bug 診斷)、`threshold_sensitivity_v2.md`、
 `task2_full_v2_regeneration.md`、`task4_v1_vs_v2_position_binding.md`。
+
+---
+
+## Phase 2 - 2026-08-31 16:4x - Phase 1 較優的 checkpoint(best_model_full_v2.pt,
+所有指標都優於 filtered_v2)為基礎,依序嘗試 exp2/exp3/exp4
+
+### exp2 - commit `9e30fda`(先跑錯一次,已清乾淨重跑,見下方 ⚠️)
+
+假設: 用比昨晚失敗的 x3 更溫和的 x2 倍數,重新加權雙 position 句子抽樣機率。
+
+**⚠️ 過程犯的錯,誠實記錄**:第一次跑 exp2 時忘記昨晚 exp1 的 `train_vlm.py`
+改動已經被 `git revert` 掉了,直接下 `+train.reweight_multi_position=true`
+參數,Hydra 沒有報錯(`+` 前綴允許新增任意 key),但程式碼裡根本沒有任何地方
+讀取這個 key,等於整個實驗跑成一次跟 `full_v2` 一模一樣的 shuffle=True 訓練
+(兩條 loss curve 幾乎一致:0.519871 vs 0.519731 epoch0 train loss,只有浮點/
+CUDA 非決定性造成的極小差異)。**發現後整組清掉(checkpoint、eval csv、log
+目錄)重新來,把 reweight 邏輯重新加回 `train_vlm.py`,用同樣的 x2.0 倍數
+重跑一次,這次日誌裡有印出 `reweight_multi_position=True: 1713/10241 筆
+雙子句樣本,權重 x2.0` 確認邏輯真的有生效。**
+
+改動(重跑後,實際生效版本): `data=full_v2` + `+train.reweight_multi_position=true`
++ `+train.multi_position_weight=2.0`,epoch=10(跟 full_v2 baseline 一致)。
+
+結果:
+
+| 指標 | full_v2(baseline) | exp2(reweight x2,真的生效) |
+|---|---|---|
+| binding accuracy | 70.9% | 70.3%(-0.6pp) |
+| mismatch rate | 29.1% | 29.7%(+0.6pp) |
+| **position recall** | 41.6% | **44.7%(+3.1pp)** |
+| position precision | 41.4% | 41.1%(-0.3pp) |
+
+結論: **保留**。position recall(Task A/B 鎖定的核心問題指標)真的有提升,
+其他指標小幅下降但幅度不大,net positive。往下一個 exp 疊加。
+
+### exp3 - 增加 epoch 數(10→16),建立在 exp2 的 reweight x2 設定上
+
+假設: 訓練更久,position binding 有沒有隨之改善,同時觀察過擬合訊號。
+
+結果:val loss 在 epoch 7(0.3827)觸底,之後一路回升到 epoch 15(0.4176)——
+**明確過擬合訊號**(train loss 持續降到 0.270,val loss 卻回升),epoch 13
+還出現 gradient norm 異常尖峰(119.46,平常都在 5-25 之間)。`train_vlm.py`
+的 checkpoint 機制只存 val_loss 最低的那次,所以實際存下來的是 epoch7
+(0.3827),不是 epoch16 訓練完的最終權重。
+
+評估這個 epoch7 checkpoint(注意:雖然跟 exp2 一樣是 epoch7,但因為
+`train.epoch=16` 改變了 cosine LR schedule 的總步數分母,兩者的 LR 曲線
+形狀不同,不是完全一樣的訓練軌跡):
+
+| 指標 | exp2(epoch10 budget,best@ep7) | exp3(epoch16 budget,best@ep7) |
+|---|---|---|
+| binding accuracy | 70.3% | 67.0%(-3.3pp) |
+| mismatch rate | 29.7% | 33.0%(+3.3pp) |
+| position recall | 44.7% | 41.9%(-2.8pp) |
+| position precision | 41.1% | 40.4%(-0.7pp) |
+
+結論: **revert**。全部指標都比 exp2 差,不只是「訓練更久沒幫助」,是「把
+epoch 預算設定到 16 這件事本身」透過 LR schedule 改變讓早期訓練軌跡變差了。
+checkpoint、eval csv、log 目錄都已刪除(沒有 code 改動需要 git revert,只有
+hydra override,不影響 `train_vlm.py`)。**確認 Day33 提過的過擬合訊號在這個
+模型上是真的,固定在 10 epoch 附近(best 通常落在 epoch 6-8)是合理的訓練
+長度,不需要也不應該加長。**

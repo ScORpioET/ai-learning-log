@@ -1,3 +1,15 @@
+# Day36:分析用的大檔案(資料/照片疊圖/checkpoint),只 track code + markdown。
+# *.png 不整個排除——那是圖表(loss curve、histogram)之類的小檔案,直接被 md
+# 報告引用,是文件的一部分,不是原始資料;但「熱像照片 + 疊框/疊字」這種大量
+# png 相簿(本質跟 *.jpg 是同一種東西,只是存檔格式剛好選了 png)個別目錄排除。
+*.jsonl
+*.json
+*.csv
+*.jpg
+*.jpeg
+Day35/outputs/day35_gt_vs_yolo/
+Phase3/Day32/preview_v3/*.png
+
 # Python
 .venv/
 __pycache__/
@@ -33,12 +45,18 @@ archive/
 
 # 個人測試檔案 / 熱像資料集(太大不進 git)
 test.py
-thermal_dataset/
+# 只排除底下的圖片/影片子目錄(12GB 原始資料),頂層的 generate_captions.py
+# 這種 code 檔案要留著版控——之前整個目錄排除,連腳本本身都沒進 git,Day36 才發現。
+thermal_dataset/*/
 FLIR_ADAS_v2.zip
 md5sums_full.txt
 
-# Hydra 自動產生的實驗紀錄
-outputs/
+# Hydra 自動產生的實驗紀錄(逐一列出實際的 hydra run 目錄,不要用
+# 「outputs/」這種任何深度都比對的萬用規則——之前這樣寫會連 Day35/outputs/
+# 這種手動分析報告輸出目錄也一起排除掉,Day36 才發現)
+Phase1-nanoGPT/Day18/outputs/
+Phase1-nanoGPT/Day22/outputs/
+Phase3/Day32/outputs/
 multirun/
 
 API_key.txt

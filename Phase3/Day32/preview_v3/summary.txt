@@ -1,0 +1,39 @@
+preview_01.png | data/video-M3RnGhMTucGPeqziZ-frame-008250-9EKBv8q3GPKviBDgQ.jpg
+  GT : Many cars, one nearby on the left.
+  GEN: Many cars, one nearby on the right.
+
+preview_02.png | data/video-JhYLiFCieHQHaY8o7-frame-003636-8LQgFDXyhRY6juofr.jpg
+  GT : Several cars, the nearest on the left; two pedestrians, one on the left.
+  GEN: Night: three pedestrians, one ahead; two cars, the nearest on the left.
+
+preview_03.png | data/video-zp8ed5vPKfAJ2fKWh-frame-000030-bFKsh2jKTwxzC6gcM.jpg
+  GT : Several pedestrians, one nearby ahead.
+  GEN: Several pedestrians, the nearest on the left.
+
+preview_04.png | data/video-nMfT5vK8MfEEjQ44W-frame-008398-skoBsC2ysoq5tvYj4.jpg
+  GT : Several cars, the nearest on the left; a pedestrian on the left.
+  GEN: Two cars, oneAbuse ahead.
+
+preview_05.png | data/video-nMfT5vK8MfEEjQ44W-frame-004681-p9HZDdEGZnGYtooaK.jpg
+  GT : Many pedestrians, one ahead.
+  GEN: Several cars, one nearby on the right.
+
+preview_06.png | data/video-Qk8msXvMopoYNDdco-frame-000640-wRG92Pf57TCjHWWH9.jpg
+  GT : Many pedestrians, one nearby on the right.
+  GEN: Several cars, one in the distance on the right.
+
+preview_07.png | data/video-M3RnGhMTucGPeqziZ-frame-005100-QSgXGktCen78SeQzo.jpg
+  GT : Several cars, the nearest on the left.
+  GEN: Many cars, one nearby on the right.
+
+preview_08.png | data/video-M3RnGhMTucGPeqziZ-frame-000000-TicrTS5ui6TE3ZD6e.jpg
+  GT : Three cars, one ahead.
+  GEN: Many cars, the nearest on the left.
+
+preview_09.png | data/video-57kWWRyeqqHs3Byei-frame-008395-NTjEwXFNqfWkrZhiW.jpg
+  GT : Several cars, the nearest ahead; a pedestrian on the left.
+  GEN: Many cars, one nearby on the right.
+
+preview_10.png | data/video-JhYLiFCieHQHaY8o7-frame-003846-ZaXhuJMHcpPvvKeWb.jpg
+  GT : Many pedestrians, the nearest on the left.
+  GEN: Night: many pedestrians, one nearby on the right.

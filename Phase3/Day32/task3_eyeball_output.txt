@@ -1,0 +1,65 @@
+using device: cuda
+loaded checkpoints/best_model.pt: epoch=4, val_loss=0.3548
+loaded checkpoints/best_model_filtered.pt: epoch=6, val_loss=0.3993
+
+==========================================================================================
+
+FILE: data/video-JhYLiFCieHQHaY8o7-frame-002195-t9p9hLssbg77DLqxH.jpg
+  GT (full)      : Night: at medium distance ahead there are several pedestrians; at medium distance ahead there is a car.
+  GT (filtered)  : Night: several pedestrians, one ahead; a car ahead.
+  GEN best_model.pt          : Night: nearby on the right there is a pedestrian; nearby on the left there is a pedestrian.
+  GEN best_model_filtered.pt : Several pedestrians, the nearest on the right.
+
+FILE: data/video-YQpCvGJxowy9uhkCw-frame-006300-RmduwqDEZGaQwjxxM.jpg
+  GT (full)      : Nearby on the right there is a car; nearby on the left there are two cars.
+  GT (filtered)  : Many cars, one nearby on the right.
+  GEN best_model.pt          : Nearby on the left there are two pedestrians; at medium distance ahead there are several cars.
+  GEN best_model_filtered.pt : Many cars, the nearest on the left.
+
+FILE: data/video-zp8ed5vPKfAJ2fKWh-frame-002073-tQpYPw4iRtcEqAvve.jpg
+  GT (full)      : Nearby on the right there are several pedestrians; nearby ahead there is a car.
+  GT (filtered)  : Many pedestrians, the nearest on the right.
+  GEN best_model.pt          : Nearby on the right there is a car; at medium distance on the left there is a bicycle.
+  GEN best_model_filtered.pt : Many cars, one nearby on the right.
+
+FILE: data/video-zp8ed5vPKfAJ2fKWh-frame-003267-PF4EPNZbETHRX45HG.jpg
+  GT (full)      : Nearby ahead there is a car; at medium distance ahead there are several cars.
+  GT (filtered)  : Three cars, the nearest ahead.
+  GEN best_model.pt          : Nearby ahead there is a car; at medium distance on the left there is a car.
+  GEN best_model_filtered.pt : Three cars, the nearest ahead; a bus nearby on the left.
+
+FILE: data/video-AP7PvpujjZZGLnsJt-frame-003765-HbkL4AHTbGRPyTnGx.jpg
+  GT (full)      : Nearby on the right there is a car; nearby on the right there is a pedestrian.
+  GT (filtered)  : Several cars, one nearby on the right.
+  GEN best_model.pt          : Nearby on the left there is a truck; nearby ahead there is a car.
+  GEN best_model_filtered.pt : Several cars, the nearest on the left; a pedestrian nearby on the right.
+
+FILE: data/video-k5bTJAiyEgHismN7Y-frame-004624-WQMJgCPSogQbt8qcq.jpg
+  GT (full)      : Nearby on the right there is an object; nearby ahead there is a car.
+  GT (filtered)  : Several cars, the nearest ahead; a bus nearby on the right.
+  GEN best_model.pt          : At medium distance ahead there are two cars; at medium distance ahead there is a pedestrian.
+  GEN best_model_filtered.pt : Three cars, one nearby ahead.
+
+FILE: data/video-57kWWRyeqqHs3Byei-frame-004451-id9CTPqA5GQNQtDQb.jpg
+  GT (full)      : Nearby on the right there is a car; nearby on the left there are several cars.
+  GT (filtered)  : Many cars, one nearby on the right.
+  GEN best_model.pt          : Nearby on the right there is a car; nearby on the left there is a motorcycle.
+  GEN best_model_filtered.pt : Several cars, the nearest on the right.
+
+FILE: data/video-57kWWRyeqqHs3Byei-frame-002218-GvFqwFzdrm8aPduB5.jpg
+  GT (full)      : Nearby ahead there is a car; nearby on the right there is a pedestrian.
+  GT (filtered)  : Several cars, one nearby ahead; two pedestrians, the nearest on the right.
+  GEN best_model.pt          : Nearby on the right there is a car; nearby ahead there is a car.
+  GEN best_model_filtered.pt : Night: three cars, one nearby ahead; three pedestrians, one ahead.
+
+FILE: data/video-Qk8msXvMopoYNDdco-frame-005315-oJuSMH6XCuESTWAki.jpg
+  GT (full)      : Nearby on the right there is a pedestrian; nearby ahead there is a car.
+  GT (filtered)  : Several pedestrians, one nearby on the right.
+  GEN best_model.pt          : Nearby ahead there are two cars; nearby on the right there is a car.
+  GEN best_model_filtered.pt : Many pedestrians, the nearest ahead.
+
+FILE: data/video-57kWWRyeqqHs3Byei-frame-006681-o5NXT3jrAkJr7wmfq.jpg
+  GT (full)      : Nearby on the left there is a car; nearby ahead there are two cars.
+  GT (filtered)  : Several cars, the nearest on the left.
+  GEN best_model.pt          : Nearby on the left there are two cars; nearby ahead there is a car.
+  GEN best_model_filtered.pt : Many cars, the nearest on the left.

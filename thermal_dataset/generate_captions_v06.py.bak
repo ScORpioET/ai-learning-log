@@ -1,0 +1,367 @@
+"""
+FLIR ADAS v2 rule-based scene caption generator
+Day32 - Week10 Task 1
+
+用法:
+    python generate_captions.py --split train --out captions_train.jsonl --sample 2000
+
+先在小樣本上跑,人工檢查隨機抽出的 10 句輸出通不通順、資訊夠不夠、
+詞彙會不會太雜,確認沒問題再不加 --sample 跑全量。
+
+【v0.5 語言切換】輸出語言從中文改成英文——因為 Jack Phase 1 手刻的 GPT-2
+byte-level BPE tokenizer 是用英文語料訓練的,merge 規則全部是英文文字的
+統計分布,中文字元雖然技術上編碼得出來(byte-level BPE 有 byte-fallback),
+但完全沒有學過對應的 merge,序列長度會暴增、對中文毫無效率可言。
+改成英文才能跟 decoder 自己的 tokenizer 是同一個語言分布,這件事要趁
+還沒開始 fine-tune 之前先改掉,不要等訓練完才發現要重來。
+註解維持中文(給 Jack 看的),生成的句子本身改英文(給 decoder 吃的)。
+"""
+SCRIPT_VERSION = "v0.6 (2026-08-25, 修正英文子句大小寫——分號接續子句不該各自大寫開頭)"
+
+import json
+import argparse
+import random
+from pathlib import Path
+from collections import defaultdict, Counter
+
+# ---------------------------------------------------------------------------
+# 1. 類別分組
+#
+# DYNAMIC_CLASSES:會動、值得當事件主體生成句子的類別,value 是英文單數名詞。
+# 這份清單是照你實測的 counts 決定的——只放你資料集裡真的有量的類別,
+# COCO 80 類裡幾乎是 0 筆的(cat/laptop/pizza 這種)全部忽略不處理。
+#
+# 🟢 2026-08-25 Jack 實測 images_thermal_train/coco.json 完整 histogram:
+#    car 73623 / person 50478 / sign 20770 / light 16198 / bike 7237 /
+#    bus 2245 / other vehicle 1373 / motor 1116 / hydrant 1095 / truck 829 /
+#    skateboard 29 / stroller 15 / scooter 15 / deer 8 / train 5 / dog 4
+#    rider 完全沒出現(0 筆)。dog / rider 都不放進清單。
+# ---------------------------------------------------------------------------
+
+DYNAMIC_CLASSES = {
+    "person": "pedestrian",
+    "bike": "bicycle",
+    "motor": "motorcycle",
+    "car": "car",
+    "bus": "bus",
+    "truck": "truck",
+    "other vehicle": "vehicle",
+    "train": "train",          # 實測 5 筆,一定會被下面的 long-tail 門檻收進 fallback
+    "skateboard": "skateboard",  # 實測 29 筆,同上
+    "stroller": "stroller",      # 實測 15 筆,同上
+    "scooter": "scooter",        # 實測 15 筆,同上
+}
+
+# 不規則複數,沒列在這裡的一律用「+s」規則變化(car->cars, truck->trucks...)。
+IRREGULAR_PLURALS = {
+    "bus": "buses",
+}
+
+# 樣本數低於這個門檻的類別,不單獨命名,一律用通用詞帶過,
+# 避免 decoder 學到幾乎沒看過幾次的生僻詞彙。
+#
+# v0.3 起改成在 main() 裡用當下這個 split 實際跑出來的 counts 動態判斷,
+# 低於門檻的類別在生成句子時會被換成 LONG_TAIL_LABEL,不寫死清單,
+# 這樣 train/val 兩個 split 各自的長尾類別即使不同,也會分別正確處理。
+LONG_TAIL_THRESHOLD = 500
+LONG_TAIL_LABEL = "object"
+
+# 場景背景類別:不生成任何句子內容,只記錄「這張圖有沒有出現」當中繼資料。
+# light/hydrant/sign 這三類數量都不小(light 快兩萬筆、sign近三萬筆),
+# 在公路情境資料裡幾乎每張圖都會有,講出來對事件描述沒有分辨力,
+# 反而會稀釋訓練資料的語意密度、讓句子讀起來不自然(v0 實測發現)。
+STATIC_CONTEXT_CLASSES = {
+    "light": "traffic light",
+    "hydrant": "fire hydrant",
+    "sign": "sign",
+}
+
+WEATHER_MAP = {
+    "partly_cloudy": "cloudy",
+    "cloudy": "overcast",
+    "rain": "rainy",
+    "fog": "foggy",
+    "clear": None,  # 晴天不特別標註,句子更簡潔
+}
+
+
+def plural_of(name):
+    if name in IRREGULAR_PLURALS:
+        return IRREGULAR_PLURALS[name]
+    return name + "s"
+
+
+def indefinite_article(name):
+    return "an" if name[0].lower() in "aeiou" else "a"
+
+
+# ---------------------------------------------------------------------------
+# 2. 位置 / 距離
+#
+# 位置用畫面左右三等分判斷(簡單起點,之後可以再細分)。
+# 距離用 bbox 面積佔畫面比例的「資料集實測分位數」當門檻,
+# 不是憑感覺猜的數字——先跑 compute_area_thresholds() 算出來再用。
+# 兩者內部都用英文代碼("left"/"right"/"ahead"、"near"/"mid"/"far"),
+# 實際句子用詞在 build_caption() 裡的 POSITION_PHRASE / DISTANCE_PHRASE 統一管理。
+# ---------------------------------------------------------------------------
+
+def position_label(bbox, img_w, img_h):
+    x, y, w, h = bbox
+    cx = x + w / 2
+    ratio = cx / img_w
+    if ratio < 1 / 3:
+        return "left"
+    elif ratio > 2 / 3:
+        return "right"
+    return "ahead"
+
+
+def distance_label(bbox, img_w, img_h, near_thresh, far_thresh):
+    """
+    三個距離桶都要明確標詞,不要留白——v0.1 時中距離留白,
+    跟近距離句子並列時讀起來像是在重複前一句,容易被誤會成合併 bug 沒修好。
+    """
+    x, y, w, h = bbox
+    area_ratio = (w * h) / (img_w * img_h)
+    if area_ratio >= near_thresh:
+        return "near"
+    elif area_ratio <= far_thresh:
+        return "far"
+    return "mid"
+
+
+def compute_area_thresholds(coco, dynamic_cat_ids, near_pct=75, far_pct=25):
+    """用資料集裡所有動態類別 bbox 的面積比例分布,取 25/75 百分位數當門檻。"""
+    img_wh = {im["id"]: (im["width"], im["height"]) for im in coco["images"]}
+    ratios = []
+    for ann in coco["annotations"]:
+        if ann["category_id"] not in dynamic_cat_ids:
+            continue
+        w_img, h_img = img_wh[ann["image_id"]]
+        x, y, w, h = ann["bbox"]
+        ratios.append((w * h) / (w_img * h_img))
+    ratios.sort()
+    n = len(ratios)
+    if n == 0:
+        return 0.05, 0.005  # fallback,理論上不會走到這裡
+    near = ratios[int(n * near_pct / 100)]
+    far = ratios[int(n * far_pct / 100)]
+    return near, far
+
+
+# ---------------------------------------------------------------------------
+# 3. 場景 metadata:image-level extra_info 裡有 hours(day/night)、
+#    weather、scene(highway/city...)——這是意外發現的額外資產,
+#    可以拿來豐富句子語境,不只靠 bbox。
+# ---------------------------------------------------------------------------
+
+def scene_prefix(image_extra_info):
+    hours = image_extra_info.get("hours")
+    weather = image_extra_info.get("weather")
+    parts = []
+    if hours == "night":
+        parts.append("Night")
+    weather_en = WEATHER_MAP.get(weather, weather)
+    if weather_en:
+        parts.append(weather_en.capitalize())
+    return ", ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# 4. 主要生成邏輯
+# ---------------------------------------------------------------------------
+
+POSITION_PHRASE = {"left": "on the left", "right": "on the right", "ahead": "ahead"}
+DISTANCE_PHRASE = {"near": "nearby", "mid": "at medium distance", "far": "in the distance"}
+
+
+def group_objects(objects):
+    """
+    objects: [(cat_name, en_name, position, distance, area)]
+
+    v0 直接對 top-2 最大物件生句時,發現同類別+同位置的兩個不同物件
+    (例如兩台車剛好都在右側、近距離)會各自生成一句一模一樣的話,
+    讀起來像 bug、也沒有分辨資訊量。這裡先依 (en_name, position, distance)
+    分組合併,同組用「two/several」這種計數表達,而不是重複講兩次。
+    """
+    groups = {}
+    for cat_name, en_name, pos, dist, area in objects:
+        key = (en_name, pos, dist)
+        if key not in groups:
+            groups[key] = {"cat_name": cat_name, "count": 0, "max_area": area}
+        groups[key]["count"] += 1
+        groups[key]["max_area"] = max(groups[key]["max_area"], area)
+
+    merged = []
+    for (en_name, pos, dist), g in groups.items():
+        merged.append((en_name, pos, dist, g["count"], g["cat_name"], g["max_area"]))
+
+    merged.sort(key=lambda o: -o[5])  # 用組內最大面積(最近的那個)排序
+    return merged
+
+
+def build_caption(objects, image_extra_info):
+    """
+    objects: [(cat_name, en_name, position, distance, area)],
+             已依單一物件 area 由大到小排序(合併前的原始清單)。
+    先合併同類別同位置的物件,再取合併後最前面的 1-2 組生成句子,
+    避免句子太長、詞彙爆炸。沒有任何動態物件的畫面直接跳過。
+    """
+    if not objects:
+        return None
+
+    merged = group_objects(objects)
+    top = merged[:2]
+
+    prefix = scene_prefix(image_extra_info)
+    clauses = []
+    for en_name, pos, dist, count, cat_name, _ in top:
+        dist_phrase = DISTANCE_PHRASE[dist]
+        pos_phrase = POSITION_PHRASE[pos]
+        if count == 1:
+            subject = f"{indefinite_article(en_name)} {en_name}"
+            verb = "is"
+        elif count == 2:
+            subject = f"two {plural_of(en_name)}"
+            verb = "are"
+        else:
+            subject = f"several {plural_of(en_name)}"
+            verb = "are"
+        clauses.append(f"{dist_phrase} {pos_phrase} there {verb} {subject}")
+
+    sentence = "; ".join(clauses)
+    if prefix:
+        sentence = f"{prefix}: {sentence}"
+
+    # 只把整句第一個字母大寫,分號接續的後續子句維持小寫(英文文法慣例),
+    # 不要每個子句(例如 distance phrase)自己各自大寫開頭。
+    sentence = sentence[0].upper() + sentence[1:]
+
+    return sentence + "."
+
+
+# ---------------------------------------------------------------------------
+# 5. 主流程
+# ---------------------------------------------------------------------------
+
+def main(split, out_path, sample_n=None, long_tail_ref_split=None):
+    root = Path.home() / "ai-transition-2026" / "thermal_dataset" / f"images_thermal_{split}"
+    coco = json.load(open(root / "coco.json"))
+
+    id2name = {c["id"]: c["name"] for c in coco["categories"]}
+    name2id = {c["name"]: c["id"] for c in coco["categories"]}
+    dynamic_ids = {c["id"] for c in coco["categories"] if c["name"] in DYNAMIC_CLASSES}
+    static_ids = {c["id"] for c in coco["categories"] if c["name"] in STATIC_CONTEXT_CLASSES}
+
+    # long-tail 門檻:決定哪些 DYNAMIC_CLASSES 類別要收進 fallback。
+    #
+    # 🔴 2026-08-28 bug 修正:原本 train/val 各自用「這個 split 自己的」
+    # annotation counts 判斷,導致同一個類別在樣本數大的 train 保留真名
+    # (bicycle/bus/truck...),在樣本數小很多的 val 因為沒過門檻全被改叫
+    # object——train/val 的 caption 詞彙表因此不一致,評估時看起來像模型在
+    # 瞎講一堆 GT 沒有的類別,實際上是基準本身的 bug。用 --long-tail-ref-split
+    # 指定一個「共用基準」的 split(預設沿用自己這個 split,向後相容;
+    # 修 bug 時傳 "train")算 counts,讓所有 split 共用同一份 long_tail_names。
+    ref_split = long_tail_ref_split or split
+    if ref_split != split:
+        ref_root = Path.home() / "ai-transition-2026" / "thermal_dataset" / f"images_thermal_{ref_split}"
+        ref_coco = json.load(open(ref_root / "coco.json"))
+        ref_id2name = {c["id"]: c["name"] for c in ref_coco["categories"]}
+        cat_counts_by_name = Counter(ref_id2name[a["category_id"]] for a in ref_coco["annotations"])
+        print(f"[info] long-tail 門檻改用「{ref_split}」split 的 counts 當基準(跨 split 共用,修正 long-tail bug)")
+    else:
+        cat_counts_by_name = Counter(id2name[a["category_id"]] for a in coco["annotations"])
+
+    long_tail_names = {
+        name for name in DYNAMIC_CLASSES
+        if cat_counts_by_name.get(name, 0) < LONG_TAIL_THRESHOLD
+    }
+    if long_tail_names:
+        detail = ", ".join(
+            f"{name}({cat_counts_by_name.get(name, 0)})" for name in sorted(long_tail_names)
+        )
+        print(f"[info] long-tail 併入「{LONG_TAIL_LABEL}」: {detail}")
+
+    near_thresh, far_thresh = compute_area_thresholds(coco, dynamic_ids)
+    print(f"[info] near_thresh={near_thresh:.4f}, far_thresh={far_thresh:.4f}")
+
+    img_meta = {im["id"]: im for im in coco["images"]}
+    anns_by_img = defaultdict(list)
+    for ann in coco["annotations"]:
+        anns_by_img[ann["image_id"]].append(ann)
+
+    image_ids = list(img_meta.keys())
+    if sample_n:
+        random.seed(0)
+        image_ids = random.sample(image_ids, min(sample_n, len(image_ids)))
+
+    results = []
+    for img_id in image_ids:
+        im = img_meta[img_id]
+        w_img, h_img = im["width"], im["height"]
+        anns = anns_by_img.get(img_id, [])
+
+        dyn_objs = []
+        static_present = set()
+        for ann in anns:
+            cat_name = id2name[ann["category_id"]]
+            if ann["category_id"] in static_ids:
+                static_present.add(cat_name)
+                continue
+            if ann["category_id"] not in dynamic_ids:
+                continue
+
+            # 過濾嚴重遮蔽的物件,避免生成不可靠的描述
+            occluded = ann.get("extra_info", {}).get("occluded", "") or ""
+            if "heavy" in occluded:
+                continue
+
+            x, y, w, h = ann["bbox"]
+            area = w * h
+            pos = position_label(ann["bbox"], w_img, h_img)
+            dist = distance_label(ann["bbox"], w_img, h_img, near_thresh, far_thresh)
+
+            if cat_name in long_tail_names:
+                en_name = LONG_TAIL_LABEL
+            else:
+                en_name = DYNAMIC_CLASSES.get(cat_name, LONG_TAIL_LABEL)
+            dyn_objs.append((cat_name, en_name, pos, dist, area))
+
+        dyn_objs.sort(key=lambda o: -o[4])  # 面積大(近)的排前面
+
+        caption = build_caption(dyn_objs, im.get("extra_info", {}))
+        if caption is None:
+            continue
+
+        results.append({
+            "file_name": im["file_name"],
+            "caption": caption,
+            "num_objects": len(dyn_objs),
+            "has_static_context": sorted(static_present),  # 留著當中繼資料,不進句子
+        })
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        for r in results:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    print(f"[done] {len(results)} captions written to {out_path}")
+    print("\n=== 隨機抽 10 句檢查 ===")
+    for r in random.sample(results, min(10, len(results))):
+        print(f"- {r['caption']}   ({r['file_name']})")
+
+
+if __name__ == "__main__":
+    print(f"[script version] {SCRIPT_VERSION}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--split", default="train", choices=["train", "val"])
+    parser.add_argument("--out", default="captions_train.jsonl")
+    # 不打 --sample 就是真的全量;要小樣本測試才明確指定數字(例如 --sample 2000)。
+    parser.add_argument("--sample", type=int, default=None,
+                         help="先跑小樣本檢查品質(例如 --sample 2000),"
+                              "確認沒問題後不要加這個參數,才會跑全量")
+    parser.add_argument("--long-tail-ref-split", default=None, choices=["train", "val"],
+                         help="long-tail 門檻用哪個 split 的 counts 當基準,"
+                              "不指定就沿用自己這個 split(舊行為,向後相容)。"
+                              "修 train/val 詞彙不一致的 bug 時,對 val 傳 train。")
+    args = parser.parse_args()
+    main(args.split, args.out, args.sample, args.long_tail_ref_split)

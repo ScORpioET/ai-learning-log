@@ -119,11 +119,52 @@ TEMPLATE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ---------------------------------------------------------------------------
+# Day36:generate_captions.py v0.7+(class-first 重寫,2026-08-29 起)用的是完全
+# 不同的句型——不再是「there is X」,改成 count_to_subject() + build_class_clause()
+# 那套:「two cars, one nearby ahead」/「a car ahead」這種。
+#
+# 上面的 TEMPLATE_RE 是照 v0.6 的「there is X」句型寫的,舊版 captions_train.jsonl/
+# captions_val.jsonl(best_model.pt 訓練用的那份,Aug 25 產出)是 v0.6 格式,
+# 這個 regex 對它們是對的。但 Day35 的 captions_{train,val}_filtered.jsonl 是用
+# 現在的 v0.9 腳本(基於 v0.7 class-first 邏輯)生的,句型完全不一樣,舊 regex
+# 打上去必定 0% match——不是模型退化,是這個 regex 本來就沒涵蓋新句型。
+# 新增 TEMPLATE_RE_V7,is_template_ok() 兩個 regex 都試,哪個對就算過。
+# ---------------------------------------------------------------------------
+COUNT_WORD_RE = "(?:two|three|several|many)"
+
+
+def _make_subject_res_v7():
+    singular_alts = [f"(?:a|an) {re.escape(n)}" for n in EN_NAMES]
+    plural_alts = [re.escape(plural_of(n)) for n in EN_NAMES]
+    singular = "(?:" + "|".join(singular_alts) + ")"
+    plural = f"{COUNT_WORD_RE} (?:" + "|".join(plural_alts) + ")"
+    return singular, plural
+
+
+SINGULAR_SUBJECT_RE_V7, PLURAL_SUBJECT_RE_V7 = _make_subject_res_v7()
+
+# distance_phrase_for() 在 v0.7 Level1 修正後,mid 距離不輸出任何字詞(直接省略),
+# 只有 near("nearby")/far("in the distance") 兩個極端會出現在句子裡,"at medium
+# distance" 這個字面不會再出現(這點跟 v0.6 的 TEMPLATE_RE 不一樣,不能沿用)。
+DIST_RE_V7 = r"(?:nearby|in the distance)"
+
+CLAUSE_RE_V7 = (
+    rf"(?:{SINGULAR_SUBJECT_RE_V7}(?: {DIST_RE_V7})? {POS_RE}"          # count==1
+    rf"|{PLURAL_SUBJECT_RE_V7}, the nearest {POS_RE}"                    # count>=2, style=nearest
+    rf"|{PLURAL_SUBJECT_RE_V7}, one(?: {DIST_RE_V7})? {POS_RE})"         # count>=2, style=one
+)
+
+TEMPLATE_RE_V7 = re.compile(
+    rf"^(?:{PREFIX_RE})?{CLAUSE_RE_V7}(?:; {CLAUSE_RE_V7})?\.$",
+    re.IGNORECASE,
+)
+
 
 def is_template_ok(caption):
     if not caption or not caption[0].isupper():
         return False
-    return TEMPLATE_RE.match(caption) is not None
+    return TEMPLATE_RE.match(caption) is not None or TEMPLATE_RE_V7.match(caption) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +276,11 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--val-captions", default=CAPTIONS_VAL_PATH,
                          help="val captions jsonl 路徑(換成 captions_val_v2.jsonl 可評估 long-tail bug 修好後的版本)")
+    parser.add_argument("--train-captions", default=CAPTIONS_TRAIN_PATH,
+                         help="train captions jsonl 路徑,重訓 tokenizer 用——一定要跟目標 checkpoint "
+                              "訓練時用的 train captions 是同一份,不然 token id 對不上 embedding "
+                              "(v3 model 要傳 captions_train_v3.jsonl)")
+    parser.add_argument("--ckpt", default=CKPT_PATH, help="checkpoint 路徑(v3 model 傳 checkpoints_v3/best_model.pt)")
     parser.add_argument("--out", default=OUT_CSV, help="輸出 CSV 路徑")
     return parser.parse_args()
 
@@ -247,11 +293,11 @@ def main():
 
     # --- 1. 重新訓練 tokenizer(必須跟 train_vlm.py 用同一份語料 + vocab_size) ---
     train_captions = []
-    with open(CAPTIONS_TRAIN_PATH, "r", encoding="utf-8") as f:
+    with open(args.train_captions, "r", encoding="utf-8") as f:
         for line in f:
             train_captions.append(json.loads(line))
 
-    print(f"[1/5] 用 {len(train_captions)} 筆 train captions 重新訓練 tokenizer (vocab_size={BASE_VOCAB_SIZE})...")
+    print(f"[1/5] 用 {len(train_captions)} 筆 train captions ({args.train_captions}) 重新訓練 tokenizer (vocab_size={BASE_VOCAB_SIZE})...")
     tokenizer = minbpe()
     tokenizer.train(" ".join(c["caption"] for c in train_captions), vocab_size=BASE_VOCAB_SIZE)
 
@@ -269,12 +315,12 @@ def main():
     hours_map = load_hours_map(VAL_COCO_PATH)
 
     # --- 3. 載入 best_model.pt ---
-    ckpt = torch.load(CKPT_PATH, map_location=device, weights_only=False)
+    ckpt = torch.load(args.ckpt, map_location=device, weights_only=False)
     config = ckpt["config"]
     model = GPT(config).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
-    print(f"[3/5] 載入 {CKPT_PATH}: epoch={ckpt['epoch']}, val_loss={ckpt['val_loss']:.4f}")
+    print(f"[3/5] 載入 {args.ckpt}: epoch={ckpt['epoch']}, val_loss={ckpt['val_loss']:.4f}")
 
     # --- 4. batch 生成 ---
     print(f"[4/5] 對 {len(val_captions)} 筆 val set 做 batch 生成 (batch_size={GEN_BATCH_SIZE}, max_new_tokens={MAX_NEW_TOKENS})...")

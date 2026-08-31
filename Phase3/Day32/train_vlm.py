@@ -399,7 +399,21 @@ def train(cfg: DictConfig):
     train_dataset = CaptionDataset(train_captions, cfg.data.features_train_path, tokenizer, cfg.data.base_vocab_size)
     val_dataset = CaptionDataset(val_captions, cfg.data.features_val_path, tokenizer, cfg.data.base_vocab_size)
 
-    train_loader = DataLoader(train_dataset, batch_size=B, shuffle=True, collate_fn=collate_fn)
+    # Day36 Phase 2 exp2:重新加權訓練資料抽樣機率,讓雙 position 句子被抽到的
+    # 頻率提高(這段昨晚 exp1 用過、因為結果變差被 git revert 掉了,今晚重新
+    # 加回來,用更溫和的倍數 x2 而不是昨晚失敗的 x3 再試一次)。opt-in flag,
+    # 預設 False 不影響既有行為。
+    reweight = getattr(cfg.train, "reweight_multi_position", False)
+    if reweight:
+        multi_weight = getattr(cfg.train, "multi_position_weight", 3.0)
+        weights = [multi_weight if ";" in c["caption"] else 1.0 for c in train_dataset.captions]
+        n_multi = sum(1 for c in train_dataset.captions if ";" in c["caption"])
+        print(f"[info] reweight_multi_position=True: {n_multi}/{len(train_dataset.captions)} 筆雙子句樣本,"
+              f"權重 x{multi_weight}")
+        sampler = torch.utils.data.WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
+        train_loader = DataLoader(train_dataset, batch_size=B, sampler=sampler, collate_fn=collate_fn)
+    else:
+        train_loader = DataLoader(train_dataset, batch_size=B, shuffle=True, collate_fn=collate_fn)
     val_loader = DataLoader(val_dataset, batch_size=B, shuffle=False, collate_fn=collate_fn)
 
     model = GPT(GPTConfig(block_size=cfg.model.block_size, vocab_size=cfg.model.vocab_size,

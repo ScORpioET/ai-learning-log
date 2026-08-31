@@ -142,3 +142,36 @@ checkpoint、eval csv、log 目錄都已刪除(沒有 code 改動需要 git reve
 hydra override,不影響 `train_vlm.py`)。**確認 Day33 提過的過擬合訊號在這個
 模型上是真的,固定在 10 epoch 附近(best 通常落在 epoch 6-8)是合理的訓練
 長度,不需要也不應該加長。**
+
+### exp4 - 調整 LR schedule(降低峰值 LR + 拉長 warmup),建立在 exp2 上
+
+假設: 現有 schedule 已經是 warmup+cosine(不是任務原本預期的「固定 LR 或簡單
+decay」),所以測的是同一種 schedule 形狀下,峰值 LR 溫和一點會不會更穩定
+(exp3 觀察到 gradient norm 偶爾飆到 119,懷疑峰值 LR 3e-4 可能偏高)。
+
+改動: `train.max_lr=1.5e-4`(原本 3e-4 的一半) + `train.warmup_steps=150`
+(原本 50 的三倍),其餘同 exp2(`data=full_v2` + reweight x2 + epoch=10)。
+
+結果:gradient norm 確實變穩定(6-17 區間,沒有 exp3 那種尖峰),但 **val loss
+在 epoch 2(0.3896)就觸底,之後一路狂升到 epoch 9(0.4602)**——比 exp3
+更早、更明顯的過擬合,可能是峰值 LR 降太多、加上模型在少數幾步內就把訓練集
+記住了。存下來的 checkpoint 是 epoch2 那個:
+
+| 指標 | exp2 | exp4(降 LR + 拉長 warmup) |
+|---|---|---|
+| binding accuracy | 70.3% | 61.2%(-9.1pp,明顯變差) |
+| mismatch rate | 29.7% | 38.8%(+9.1pp) |
+| position recall | 44.7% | 40.7%(-4.0pp) |
+| position precision | 41.1% | 39.2%(-1.9pp) |
+
+結論: **revert**。全部指標明顯變差,checkpoint/eval csv/log 目錄都已刪除。
+**這個方向被排除:目前的 warmup+cosine schedule(max_lr=3e-4,warmup=50)已經
+是這個資料量級/模型大小下還算合理的設定,降低峰值 LR 沒有換來更穩定的收斂,
+反而讓模型更早陷入過擬合。**
+
+---
+
+## Phase 2 exp 總結:exp2(reweight x2)保留,exp3(epoch16)/exp4(降LR)都
+revert。目前最佳版本 = exp2 checkpoint(`checkpoints/best_model_exp2_reweight2x.pt`,
+epoch7, val_loss=0.3872, position recall=44.7%, binding accuracy=70.3%)。
+三個 exp 都跑完,沒有再嘗試第四個方向,照任務指示停在這裡進 Phase 3。

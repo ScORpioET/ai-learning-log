@@ -1,64 +1,71 @@
-# Pending Decisions —— 需要 Jack 判斷的事項(Day35-36 累積)
+# Pending Decisions —— 需要 Jack 判斷的事項(Day35-36 累積,含第二晚更新)
 
 不會自己決定,只列選項跟取捨。完整脈絡見
 [day35_36_summary_for_decision.md](day35_36_summary_for_decision.md)。
 
-## 1. filtered vs full 到底哪個當主力 decoder(最優先)
+**✅ 第一晚原本的第 2、3 項(threshold bug / long-tail bug)第二晚都已經修好、
+有具體結果,從這份清單移除,移到 summary 文件的「已完成」段落。**
 
-| | best_model.pt(GT full) | best_model_filtered.pt |
+## 1. filtered vs full 到底哪個當主力 decoder(優先度下降,但還是要選)
+
+第二晚 bug 修好後的數字:
+
+| | best_model_full_v2.pt | best_model_filtered_v2.pt |
 |---|---|---|
-| 物件類別 F1 | 70.8% | **72.6%** |
-| 句型模板合規率 | 98.27% | **98.53%** |
-| Position-Class Binding Accuracy | **67.9%** | 66.1% |
-| Position recall | **57.7%** | 41.7% |
-| val_loss(best epoch,不完全可比,見下方) | 0.3548 | 0.3993 |
+| 物件類別 F1 | **74.45%** | 73.63% |
+| Position-Class Binding Accuracy | **70.9%** | 69.1% |
+| Position recall | **41.6%** | 41.3% |
 
-取捨:filtered 版類別/模板略好,但 position binding(尤其 recall)明顯較弱。
-val_loss 數字不建議直接拿來當決策依據——baseline 的 loss curve 震盪劇烈
-(epoch-to-epoch 平均變動 0.032,std 0.053),epoch4 的 0.3548 疑似noisy dip;
-filtered 版曲線平滑很多(std 0.012)。兩版 tokenizer 各自重訓,cross-entropy
-數值本來就不是同尺度。
+跟第一晚比,gap 幾乎消失(第一晚 recall 差 16.0pp,現在只差 0.3pp)。full_v2
+現在每項指標都略優於 filtered_v2,但差距都在 1-2pp 內,不是壓倒性的。
 
-## 2. 要不要修 tiny-bbox threshold 讓 far 距離物件留一些
+**但這裡有個新的複雜度**:Phase 2 的 exp2(雙子句抽樣加權,position recall
++3.1pp 的改善)是建立在 `full_v2` 上做的,還沒有在 `filtered_v2` 上試過同樣
+的改動有沒有效。如果 Jack 想選 filtered 當主力,建議先確認 exp2 這個改善能不能
+遷移過去,不然兩邊比較基礎不對等(一個有加權改善、一個沒有)。
 
-今晚(Task A)找到精確機制:`GLOBAL_MIN_AREA_PCT=0.05%` 卡在
-`compute_area_thresholds()` 動態算出來的 `far_thresh`(0.04%)之上,數學上
-必然讓所有 far 距離物件 100% 被濾掉,直接導致訓練資料裡雙 position 句子比例
-從 94.7% 崩到 23.8%。
+## 2. exp2(目前最佳版本)要不要正式取代 full_v2 成為新基準
 
-選項:
-- (a) 降低 threshold,讓部分 far 物件留下——但這會讓 Day35 Task 5/6 已經
-  驗證過的「保住 person/car 70% 保留率」的取捨重新洗牌,需要重跑 threshold
-  sensitivity 分析
-- (b) 改用 per-position(而非全域統一)的過濾邏輯,但 per-class threshold
-  已經在 Task 5 試過、因為長尾類別樣本太少不可信而被 Jack 否決,per-position
-  可能有類似問題
-- (c) 維持現狀,接受 filtered 版 far 距離描述能力結構性缺失
+`checkpoints/best_model_exp2_reweight2x.pt`:position recall 44.7%(+3.1pp
+vs full_v2)、binding accuracy 70.3%(-0.6pp vs full_v2)。是小幅淨正,但不是
+全面提升。選項:
+- (a) 接受這個 trade-off,exp2 變成新的 full 版基準
+- (b) 覺得 -0.6pp binding accuracy 不能接受,維持用 full_v2
+- (c) 兩個都留著,依下游任務(比較看重 recall 還是 accuracy)決定用哪個
 
-今晚的低風險實驗範圍(只能動 epoch/sampling/LR)明確不允許碰這個,選項 a/b
-都屬於「資料生成邏輯」層級的改動,需要 Jack 判斷要不要投入。
+## 3. 要不要修 tiny-bbox threshold 讓 far 距離物件保留率更高
 
-## 3. `captions_train.jsonl`/`captions_val.jsonl`(GT full 訓練檔)要不要重新生成
+第二晚已經從 0.05% 修到 0.025%(far 保留率 0%→39.7%/47.2%),但這個修正
+意外沒有讓訓練資料裡的雙子句比例上升(23.8%→20.2%,因為 threshold 放寬也讓
+更多圖片的 car 數量衝過 `build_caption()` 的「count>=5 就 collapse」門檻)。
+如果 Jack 覺得 0.025% 還不夠、想繼續調低,或想同時處理這個 collapse 門檻
+(例如把 count>=5 的門檻拉高,讓雙子句在物件多的圖片也能保留),這些都超出
+Phase 1 的修復範圍,需要另外決定要不要做。
 
-今晚(Task B)查到這兩個檔案時間戳記是 8/25,早於 Day34 的 long-tail bug 修正
-(8/28)。實測:「object」這個 long-tail fallback 詞在 train 裡只出現在
-nearby 距離(11 次),但 val 裡分佈在三種距離(153 次)——這個已知 bug 還沒
-套用到 best_model.pt 實際訓練用的檔案上。如果 Jack 要繼續拿 GT full 當比較
-基準,建議用 `--long-tail-ref-split train` 重新生成 val captions,確保
-train/val 詞彙分布一致再比。
+## 4. 要不要投入更多時間處理 position binding,還是先進 ONNX/量化主線
 
-## 4. 要不要投入時間處理 position binding 缺陷,還是先進 ONNX/量化主線
+兩晚下來的進展:第一晚發現 filtered 版 position binding 明顯較弱(recall 差
+16.0pp)→第二晚修好兩個 bug,gap 幾乎消失(只差 0.3pp)→Phase 2 三個改善
+方向裡只有一個(適度抽樣加權)有效,且只帶來 +3.1pp,另外兩個方向(加長
+epoch、降低 LR)都因為過擬合更早發生而失敗。**報酬遞減的訊號已經出現**——
+繼續在「訓練程序」這個層級摳,可能很難再擠出大幅進步,如果要繼續大幅提升
+position binding,可能需要動到 Phase 1/2 範圍外的東西(句型模板重新設計、
+資料生成邏輯的 collapse 規則等)。這個優先順序(繼續投入 vs 轉去 ONNX/量化)
+要 Jack 決定。
 
-Day36 原本就列出的待確認項目。今晚的分析(Task A/B)讓「投入處理」這個選項
-有了明確技術路徑(修 threshold 或重新設計句型結構),但也顯示工作量比原本
-想像的大(牽涉資料生成邏輯,不是單純調參數/訓練程序能解決——今晚試的抽樣
-加權方向已驗證無效,見下一項)。這個優先順序要 Jack 決定。
+## 5. Phase 2 三個方向都跑完了,沒有窮舉所有可能
 
-## 5. 低風險改善方向只試了一種(抽樣加權),還沒試完
+今晚在允許範圍內(epoch/sampling/LR)試了三個方向(抽樣加權 x2、epoch
+10→16、降低峰值 LR),一個保留兩個 revert,都有記錄在
+[experiments_log.md](experiments_log.md)。**沒有再自己發明第四個方向**,
+如果 Jack 想繼續試(例如加權倍數 1.5x/2.5x 之間找更精細的甜蜜點,或不同的
+warmup steps 單獨測試而不跟降 LR 綁在一起),還有空間,但今晚沒有做窮舉,
+是主動停下來等 Jack 決定要不要繼續。
 
-今晚 Task C 只跑了一次實驗(訓練資料抽樣加權,把雙 position 句子權重乘 3),
-結果沒有改善(部分指標反而變差),已 revert。**這是照任務指示「不要自己擴大
-實驗範圍」主動停下來的,不是判斷這整個方向(epoch/sampling/LR 微調)已經沒
-希望。** 如果 Jack 想在允許範圍內繼續試(例如調整 epoch 數到 15-20、換 LR
-schedule、用更溫和的加權倍數如 1.5x 而不是 3x),還有空間沒試過,只是今晚
-沒有繼續往下做主觀判斷要不要試,交給 Jack 決定方向。
+## 6. exp3/exp4 都顯示模型在這個資料量級下很容易過擬合(<10 epoch 就達到最佳)
+
+三次獨立訓練(full_v2、exp2、exp3、exp4)的 best epoch 都落在 epoch 2-8 之間,
+從沒有超過 epoch 8。如果之後要換更大的訓練資料量或不同資料集,這個「容易
+過擬合」的現象值得留意,可能需要更強的正則化(weight decay 目前是 0.1,或
+其他 dropout 之類的手段,這些都超出今晚 Task C 允許碰的範圍,不在今晚驗證
+範圍內)。

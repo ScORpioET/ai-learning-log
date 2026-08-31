@@ -88,45 +88,117 @@ checkpoint 檔案也刪除。**排除了一個假設**:單純調整抽樣權重�
 
 ---
 
-## 二、還沒拍板、需要 Jack 明天決定的事項
+## 四、Day36 課堂 v2(第二晚):Phase 1 bug 修復 + Phase 2 改善實驗結果
 
-完整版另見 [pending_decisions.md](pending_decisions.md),這裡列重點:
+**這是目前為止最重要的一段更新——上面第 6、7 點提到的兩個 bug 都已經修好,
+第二晚 pending 清單裡的第 2、3 項已經有具體結果,不再只是「要不要修」的問題。**
 
-1. **filtered vs full 到底哪個當主力 decoder**——filtered 版物件類別 F1
-   (72.6%)、句型模板合規率(98.5%)都不遜於甚至略高於 full 版(70.8%/98.3%),
-   但 position binding 全面較弱(recall 41.7% vs 57.7%)。到底看重「類別講得
-   對不對」還是「方位講得對不對」,是這次要 Jack 拍板的核心取捨。
-2. **要不要修 threshold 讓 far 距離物件留一些**——今晚找到 0.05% 卡在
-   far_thresh(0.04%)之上是問題根源,但改 threshold 屬於「資料生成邏輯」,
-   今晚工作範圍明確不允許碰(Task C 限定只能動 epoch/sampling/LR)。如果要修,
-   選項包括:降低 threshold(讓部分 far 物件留下,但這會讓 Day35/36 已經驗證
-   過的「保住 person/car 70% 保留率」的取捨重新洗牌)、或改用 per-position 而非
-   全域統一的過濾邏輯。
-3. **`captions_train.jsonl`/`captions_val.jsonl`(best_model.pt 用的 GT full
-   訓練檔)要不要拿 Day34 修好的 long-tail 邏輯重新生成**——今晚查到這兩個檔案
-   還是 8/25 的舊版,帶著已知 bug,如果 Jack 要繼續拿 GT full 當基準比較,
-   這個資料本身有洞的事實要先確認要不要處理。
-4. **要不要投入時間處理 position binding 缺陷,還是先進 ONNX/量化主線**——
-   Jack 原本就列在 Day36 待確認清單裡的問題,今晚的分析讓「投入處理」這個選項
-   多了明確的技術路徑(改 threshold 或重新設計句型結構),但也讓工作量看起來
-   更大(牽涉資料生成邏輯,不是單純調參數就能解決),這個 trade-off 要 Jack
-   決定。
-5. **今晚只試了一種低風險改善方向(抽樣加權)就沒有再試第二種**——這是照任務
-   指示「不要自己擴大實驗範圍」停下來的,不是判斷這條路已經走到頭。如果 Jack
-   想繼續在允許的範圍內(epoch 數/LR schedule)嘗試,還有空間沒試過。
+### Phase 1:兩個 bug 修復結果(git commit `82023c6`/`e689686`/`115aa55`/`14a68d4`)
+
+1. **`GLOBAL_MIN_AREA_PCT` 0.05%→0.025%**:far 距離物件保留率從 0% 回升到
+   39.7%(train)/47.2%(val)。多值 sensitivity(0.015/0.02/0.025/0.03%)全部
+   測過,見 `threshold_sensitivity_v2.md`。⚠️ 意外發現:雙子句 caption 比例
+   沒有如預期上升(23.8%→20.2%,反而微降)——threshold 放寬讓每張圖物件數
+   變多,連帶讓更多圖片的 car 數量衝過 `build_caption()` 的「count>=5 就
+   collapse 成單子句」門檻,兩個機制互相抵銷。
+2. **GT full 訓練資料重新套用 `--long-tail-ref-split train`**:確認根因是
+   val 樣本數少(1144 張),bike/motor/bus/truck/other vehicle 這些類別在 val
+   自己的 counts 都低於 500,舊版沒指定 ref split 時被錯誤折成「object」;
+   train 用自己的 counts 判斷,全部遠高於 500 不會被折。修好後兩邊「object」
+   出現比例相當(train 5 次/10241、val 1 次/1097),不再懸殊(修前 11 vs 153)。
+   見 `task2_full_v2_regeneration.md`。
+
+**修復前後 Position Binding 對照表(最重要的一張表)**:
+
+| | v1 full(舊 bug 版) | v1 filtered(舊 bug 版) | v2 full(bug 修好) | v2 filtered(bug 修好) |
+|---|---|---|---|---|
+| GT 模板 | v0.6「there is X」 | v0.7+ class-first | v0.7+ class-first | v0.7+ class-first |
+| binding accuracy | 67.9% | 66.1% | **70.9%** | **69.1%** |
+| class-position 錯位率 | 32.1% | 33.9% | **29.1%** | **30.9%** |
+| position recall | 57.7% | 41.7% | 41.6% | 41.3% |
+| position precision | 56.8% | 40.6% | 41.4% | 39.5% |
+
+⚠️ **重要方法論發現**:v1 full 用的訓練檔(8/25)是舊版 script 的 v0.6「there
+is X」模板,重跑現在的 script 一定會變成 v0.7+「class-first」模板(沒有 flag
+可以切回舊模板)——這代表 v1 full 的 position recall(57.7%)沒辦法直接跟
+v2 full(41.6%)比較,不是同一把尺(v0.6 模板平均每句 1.95 個 position
+segment,v0.7+ 只有 1.17 個,模板本身資訊密度不同)。**真正乾淨、可比較的是
+v2 full vs v2 filtered(兩者現在共用同一套模板)**:binding accuracy 70.9%
+vs 69.1%、position recall 41.6% vs 41.3%——v1 時期這個 gap 是 16.0pp,現在
+只剩 0.3pp。**結論:兩個 bug 修完後,filtered 版在 position binding 上已經
+追平 full 版,v1 觀察到的「filtered 版方位能力明顯較弱」主要是 bug 造成的,
+不是 tiny-filter 訓練資料本身有害。** 詳見 `task4_v1_vs_v2_position_binding.md`。
+
+### Phase 2:三個低風險改善實驗(以較優的 `best_model_full_v2.pt` 為基礎)
+
+| exp | 改動 | position recall | binding accuracy | 結果 |
+|---|---|---|---|---|
+| baseline(full_v2) | — | 41.6% | 70.9% | — |
+| exp2 | 雙子句抽樣加權 x2.0 | **44.7%(+3.1pp)** | 70.3%(-0.6pp) | **保留** |
+| exp3 | epoch 10→16(建立在 exp2 上) | 41.9%(-2.8pp vs exp2) | 67.0%(-3.3pp) | revert(過擬合,val loss 在 ep7 後回升) |
+| exp4 | 降峰值 LR 3e-4→1.5e-4 + 拉長 warmup(建立在 exp2 上) | 40.7%(-4.0pp vs exp2) | 61.2%(-9.1pp) | revert(更早過擬合,ep2 就觸底) |
+
+exp2 過程有個誠實記錄的失誤:第一次跑 exp2 時忘記昨晚 exp1 的 `train_vlm.py`
+改動已經被 revert,參數沒有真的生效(整組重跑一模一樣的訓練),發現後整組
+清掉重跑,詳見 `experiments_log.md`。
+
+**目前最佳版本**:`checkpoints/best_model_exp2_reweight2x.pt`
+(= full_v2 資料 + 雙子句抽樣加權 x2,epoch7,val_loss=0.3872,position
+recall=44.7%,binding accuracy=70.3%)。exp3/exp4 都確認過擬合更早發生,
+**目前 10 epoch、max_lr=3e-4、warmup=50 的組合已經接近這個模型規模/資料量
+下的合理設定,沒有找到更好的 epoch 數或 LR schedule。**
 
 ---
 
-## 三、今晚 git 實驗軌跡摘要
+## 五、還沒拍板、需要 Jack 明天決定的事項
 
+完整版另見 [pending_decisions.md](pending_decisions.md),這裡列重點(比第一晚
+版本少兩項——原本的第 2、3 項今晚已經有具體修復結果,不再是空白選項):
+
+1. **filtered vs full 到底哪個當主力 decoder**——bug 修好後兩者在 position
+   binding 上已經幾乎打平(v2 full 70.9%/41.6% vs v2 filtered 69.1%/41.3%),
+   物件類別 F1 filtered 略低(73.63% vs 74.45%)。**跟第一晚比,這個決策的
+   急迫性降低了**——不再是「filtered 版方位能力明顯較弱」這種明確劣勢,
+   比較像是「兩者伯仲之間,選哪個都可以」。但 Task C 的 exp2(雙子句加權)是
+   建立在 full_v2 上做的,如果要選 filtered 當主力,同樣的 exp2 改善有沒有
+   遷移過去還沒驗證,需要 Jack 決定要不要另外花時間跑。
+2. **exp2(位居目前最佳)要不要正式取代 full_v2 成為新基準**——它在 position
+   recall 上有實質改善(+3.1pp),但 binding accuracy 略降(-0.6pp),是不是
+   接受這個 trade-off,還是要再找別的方向,需要 Jack 判斷。
+3. **要不要投入更多時間處理 position binding,還是先進 ONNX/量化主線**——
+   兩晚下來 position binding 從「filtered 版有明顯缺陷」進步到「兩版打平、
+   還能再擠出 +3pp」,報酬遞減的訊號已經出現(exp3/exp4 都沒有進一步幫助),
+   這個優先順序要 Jack 決定要不要繼續投入。
+4. **今晚 Phase 2 只在允許範圍內(epoch/sampling/LR)試了 3 個方向就都測完
+   了**——三個方向都跑完,沒有再自己發明新方向,如果 Jack 想繼續在允許範圍內
+   嘗試(例如不同的加權倍數如 1.5x/2.5x,或更細緻的 LR warmup 調整),還有
+   空間但今晚沒有做窮舉。
+
+---
+
+## 六、兩晚 git 實驗軌跡摘要
+
+**第一晚(commit `a6f5a8f` tag `day36-baseline` 之後)**:
 ```
-day36-baseline (tag, commit a6f5a8f)
-  → Task A: b421d08 (position recall 根因,找到 threshold 打架機制)
-  → Task B: 46dd86a (missing position 根因,查到舊 long-tail bug 還在跑)
-  → Task C exp1: 134db22 (reweight 抽樣,結果變差)
-  → Task C exp1 revert: 2d15e3c (git revert 134db22)
-  → Task C log: 4b5f82f (記錄 exp1 結果到 experiments_log.md)
+Task A: b421d08 (position recall 根因,找到 threshold 打架機制)
+Task B: 46dd86a (missing position 根因,查到舊 long-tail bug 還在跑)
+Task C exp1: 134db22 → revert 2d15e3c → log 4b5f82f (reweight x3,結果變差,已排除)
+Task D: 94a578d (finding 彙整 + pending decisions)
 ```
 
-沒有任何 checkpoint 覆蓋掉 `best_model.pt` 或 `best_model_filtered.pt`。
-`checkpoints_exp1_reweight/` 已刪除(失敗實驗,不留檔案)。
+**第二晚(commit `94a578d` tag `day36-course2-baseline` 之後)**:
+```
+Phase 1 Task 1: 82023c6 (修 threshold vs far_thresh 衝突,0.05%→0.025%)
+Phase 1 Task 2: e689686 (修 GT full long-tail ref-split bug)
+Phase 1 Task 3: 115aa55 (乾淨重訓 full_v2/filtered_v2)
+Phase 1 Task 4: 14a68d4 (乾淨 position binding 對照,找到模板混淆變因)
+Phase 1 log: a7a2a47 之前的部分(見上方 Phase 1 段落)
+Phase 2 exp2: 9e30fda (雙子句加權x2,保留,position recall +3.1pp)
+Phase 2 exp2/3 log: a7a2a47
+Phase 2 exp4 log: e1f9d09 (降LR,revert)
+```
+
+沒有任何 checkpoint 覆蓋掉 `best_model.pt`、`best_model_filtered.pt`、
+`best_model_full_v2.pt`、`best_model_filtered_v2.pt`。所有失敗實驗的
+checkpoint(`checkpoints_exp1_reweight/`、`checkpoints_exp2_reweight2x/`
+第一次無效跑、`checkpoints_exp3_epoch16/`、`checkpoints_exp4_lr/`)都已刪除。

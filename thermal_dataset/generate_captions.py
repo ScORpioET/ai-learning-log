@@ -144,15 +144,20 @@ OCCLUDED_DIFFICULT = "70%_-_90%_occluded_(difficult_to_see)"
 # 借用鄰近類別湊出來的,不夠可信。Task 6:Jack 決定改回**單一全域門檻**,
 # 寧可保守少濾,也不要用不可信的 per-class 數字。
 #
-# GLOBAL_MIN_AREA_PCT = 0.05 是先定的起始值(可調)。跟 Task 5 找到的
-# 「全域 threshold 同時保住 person/car >=70%」臨界值(~0.03-0.04%,見
-# Day35/outputs/threshold_sensitivity.md)相比略高一點,取捨結果跟保留率
-# 對照表都記錄在 Day35/outputs/threshold_comparison_task6.md。
+# Day36 v2 bug 修正:原本的 0.05 大於 compute_area_thresholds() 動態算出的
+# far_thresh(train 0.0427% / val 0.0464%),數學上必然讓所有 far 距離物件
+# 100% 被濾掉,導致訓練資料裡「一句話講兩個 position」的雙子句樣本從 94.7%
+# 崩到 23.8%(見 Phase3/Day32/task_a_recall_gap_analysis.md)。改成 0.025%——
+# 多值 sensitivity(0.015/0.02/0.025/0.03%)四個候選都通過「零框圖<5%、平均
+# 框數合理、far 保留率不為 0」三條準則,0.025% 在其中 far 保留率排第二高
+# (39.7%/47.2%)、比 0.015%/0.02% 濾得更接近 Day35 原本想濾掉的「人眼看不到
+# 的 tiny 框」強度、又比 0.03% 更保守。詳細對照表見
+# Phase3/Day32/threshold_sensitivity_v2.md。
 #
 # STATIC_CONTEXT_CLASSES(light/hydrant/sign)不影響 caption 文字本身(只影響
 # has_static_context 這個 metadata 欄位,不會被學進 decoder),不列入這個過濾。
 # ---------------------------------------------------------------------------
-GLOBAL_MIN_AREA_PCT = 0.05
+GLOBAL_MIN_AREA_PCT = 0.025
 
 
 COCO_TO_FLIR_ALIAS = {

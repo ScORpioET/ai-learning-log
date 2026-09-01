@@ -7,6 +7,7 @@ from PIL import Image
 from omegaconf import DictConfig
 from train_vlm import GPT, GPTConfig
 
+import regex as re
 import torch
 from torch import nn
 import torch.nn.functional as F

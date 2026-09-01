@@ -1,0 +1,19 @@
+exp2_01.png | data/video-JhYLiFCieHQHaY8o7-frame-000000-xT7BXRKKyuWEsnywX.jpg
+  GT : Night: two cars, one nearby ahead.
+  GEN: Several cars, the nearest on the left; three pedestrians, one ahead.
+
+exp2_02.png | data/video-JhYLiFCieHQHaY8o7-frame-000600-54cr88GJsdAyksdNj.jpg
+  GT : Night: a car ahead.
+  GEN: Night: a car nearby on the left.
+
+exp2_03.png | data/video-JhYLiFCieHQHaY8o7-frame-000900-pdb96S7B7fgmguxPE.jpg
+  GT : Night: several cars, one nearby on the right.
+  GEN: Three cars, the nearest on the right; a pedestrian in the distance ahead.
+
+exp2_04.png | data/video-JhYLiFCieHQHaY8o7-frame-001200-n7sXgfg2LyFCYRzSc.jpg
+  GT : Night: a car nearby on the right; a pedestrian on the left.
+  GEN: Night: several cars, one ahead; a pedestrian ahead.
+
+exp2_05.png | data/video-JhYLiFCieHQHaY8o7-frame-001500-4dRaerqz2cJhjyCHA.jpg
+  GT : Night: many cars, one nearby on the right.
+  GEN: Many cars, the nearest on the right.

@@ -1,0 +1,5 @@
+defaults:
+  - model: gpt2_124m
+  - data: shakespeare
+  - train: default
+  - generate: default

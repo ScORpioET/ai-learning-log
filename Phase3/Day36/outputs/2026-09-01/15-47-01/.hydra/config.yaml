@@ -1,0 +1,34 @@
+model:
+  block_size: 1024
+  vocab_size: 320
+  clip_vector_size: 512
+  n_layer: 12
+  n_head: 12
+  n_embd: 768
+data:
+  captions_train_path: captions_train.jsonl
+  captions_val_path: captions_val.jsonl
+  features_train_path: clip_features_train.pt
+  features_val_path: clip_features_val.pt
+  B: 8
+  T: 1024
+  total_batch_size: 524288
+  base_vocab_size: 318
+  special_token_size: 2
+train:
+  weight_decay: 0.1
+  max_lr: 0.0003
+  min_lr_ratio: 0.1
+  warmup_steps: 50
+  max_steps_increment: 1000
+  val_interval: 100
+  val_loss_steps: 20
+  ckpt_path: checkpoints/best_model.pt
+  ckpt_dir: checkpoints
+  log_dir: log
+  seed: 1337
+  epoch: 10
+generate:
+  num_return_sequences: 4
+  max_length: 64
+  prompt: We are

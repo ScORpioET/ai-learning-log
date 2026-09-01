@@ -104,3 +104,4 @@ Phase1-nanoGPT/Day18/t_sweep_dense.csv
 Phase1-nanoGPT/Day18/t_sweep_dense.py
 Phase1-nanoGPT/Day18/validate_prefill.py
 constant_folding_repro.py
+*.npy

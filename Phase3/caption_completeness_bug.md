@@ -80,3 +80,66 @@ nearby」這個句型多樣化的隨機用詞不同,這是 Level 3 的 `rng.choi
 不影響本次診斷,因為重跑時用的種子輸入跟原始生成時的 image_id 型別不同,
 不是同一次呼叫)。**車確實是在 `build_caption()` 的 count>=5 收斂分支被
 丟掉的,不是重現腳本本身的問題。**
+
+# Phase 2:規模量化(掃全體,不用人工看圖)
+
+## 方法
+
+腳本:`Phase3/day38_caption_completeness_scan.py`。對 thermal/RGB
+train/val 四個「全量版」(不套用面積過濾,對應目前定案的訓練資料:
+thermal = `captions_train_full_v2.jsonl`/`captions_val_full_v2.jsonl`,
+RGB = `captions_rgb_train_full.jsonl`/`captions_rgb_val_full.jsonl`)
+各跑一次:
+
+1. 用 `generate_captions.py` 原始函式(occlusion 過濾、long-tail 併入
+   `object`,跟生成 caption 當時同一套邏輯)重算每張圖實際出現哪些動態
+   類別(`en_name` 集合)。
+2. 篩出類別數 ≥2 的圖片(定義為「多類別圖片」)。
+3. 對每張多類別圖片,用類別的英文單複數詞形(`plural_of()` 同一套規則,
+   含 person→people 等不規則變化)在 `gt_caption` 文字裡做關鍵字比對
+   (word-boundary regex,不做語意理解),檢查是不是每個出現的類別都被
+   提到。
+4. 算「至少漏掉一個類別」的圖片數 / 多類別圖片總數。
+
+## 結果
+
+| domain/split | 多類別圖片數 | 至少漏 1 類 | **漏類別比例** | count≥5 收斂導致 | 純 top-2 截斷導致(3+ 類同時出現) |
+|---|---:|---:|---:|---:|---:|
+| thermal train | 8,429 | 7,440 | **88.27%** | 6,716 | 724 |
+| thermal val | 809 | 691 | **85.41%** | 641 | 50 |
+| rgb train | 7,245 | 6,095 | **84.13%** | 5,327 | 768 |
+| rgb val | 661 | 563 | **85.17%** | 514 | 49 |
+
+（「count≥5 收斂導致」跟「純 top-2 截斷導致」是額外拆出來給你看兩種
+機制各佔多少比例的資訊,不是題目要求的必答項——後者是 v0.7 文件裡本來
+就寫明的既有設計(一句最多講 2 類),前者才是 Phase 1 診斷出的根因。兩者
+合計不完全等於「至少漏 1 類」的總數,因為少數圖片兩種情況疊加,這裡各自
+獨立計數。）
+
+**最常被漏掉的類別(前 8 名,四個 domain/split 都一致地以 pedestrian
+最多,其次是 car/bicycle)：**
+
+- thermal train: pedestrian(3881) > car(2853) > bicycle(2769) >
+  bus(1176) > vehicle(815) > motorcycle(682) > truck(586) > object(48)
+- thermal val: pedestrian(421) > car(213) > bus(121) > bicycle(120) >
+  vehicle(43) > motorcycle(41) > truck(38) > object(8)
+- rgb train: pedestrian(3429) > bicycle(2426) > car(1873) > bus(1094) >
+  motorcycle(877) > truck(818) > vehicle(367) > object(349)
+- rgb val: pedestrian(346) > car(151) > bus(140) > bicycle(97) >
+  motorcycle(53) > truck(40) > vehicle(27) > object(11)
+
+完整明細寫在 `Phase3/day38_caption_completeness_scan_results.json`。
+
+**查數字確認的事實(不是猜的)**:四個 domain/split 的漏類別比例都落在
+84-88% 的區間,thermal/RGB 兩邊、train/val 兩邊都一致地高,不是某一個
+split 或某一個 domain 獨有的現象。抽樣人工檢查 8 筆案例(見上方 trace
+輸出)全部符合預期——被標記「漏掉」的類別在原始 bbox 裡確實存在
+(count 1-20 都有,不是雜訊),caption 裡確實沒有提到,不是關鍵字比對
+方法本身的誤判。
+
+# Phase 3:判斷是否需要修復
+
+按事先定好的規則:漏類別比例 ≥3% 判定為系統性問題,需要繼續 Phase 4。
+
+四個 domain/split 的比例(84.13% ~ 88.27%)全部遠遠超過 3% 門檻,**不是
+臨界模糊地帶**,判定為系統性問題,繼續執行 Phase 4。

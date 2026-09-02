@@ -360,3 +360,81 @@ tag: `day38-exp8-preprocessing-check`(這輪沒有新的 onnx 產物,commit 只
 包含這份紀錄)
 
 進 exp9:前處理排除後,回到 Day25-28 的逐層 bisection 找根因。
+
+## exp9/exp10 — 12 層 ViT block 逐層 bisection(第一輪:前 6 層 vs 後 6 層)
+
+**這節的節點切分方式是「查程式碼確認的事實」**:用 onnx 直接讀
+`clip_vision.onnx` 的計算圖,以每層 transformer block 的 pre-attn
+LayerNormalization(`layer_norm_{2i+1}`,i=0..11)當作該層在 graph 節點
+列表裡的起始邊界,依 topological 順序切出 12 段,每段固定 35 個節點
+(最後一段 36 個,含 post_layernorm 前的邊界),總數 421(12×35+1)+
+embeddings 前處理 9 個節點 = 430,跟 `clip_vision.onnx` 總節點數對得上。
+不是用 op 名稱猜的,是直接照 graph 拓樸切出來的。
+
+**下面的「哪一半貢獻比較多誤差」是從數字推論**,不是直接查出來的事實。
+
+### exp9 — 只量化前 6 層(layer 0-5),後 6 層(layer 6-11)整層排除量化
+
+tag: `day38-exp9-bisect-first6`
+
+quantize 節點範圍:量化 layer 0-5 共 210 個節點(quantizable 子集,實際
+`Total number of quantized nodes: 87`);layer 6-11 全部節點(210 個)
+放進 `nodes_to_exclude` 排除。
+
+```
+quantize(
+    onnx_path="clip_vision.onnx",
+    quantize_mode="int8",
+    calibration_data={"pixel_values": calib_array},
+    calibration_method="max",
+    nodes_to_exclude=<layer 6-11 全部節點名稱>,
+    output_path="clip_vision.int8.exp9_quantize_front6.onnx",
+)
+```
+
+結果 (`outputs_logs/exp9_eval.log`):
+
+- cosine sim mean = 0.633780
+- cosine sim min  = 0.538963
+- cosine sim std  = 0.043417
+
+### exp10 — 只量化後 6 層(layer 6-11),前 6 層(layer 0-5)整層排除量化
+
+tag: `day38-exp10-bisect-last6`
+
+quantize 節點範圍:量化 layer 6-11(實際 `Total number of quantized
+nodes: 44`);layer 0-5 全部節點放進 `nodes_to_exclude` 排除。
+
+```
+quantize(
+    onnx_path="clip_vision.onnx",
+    quantize_mode="int8",
+    calibration_data={"pixel_values": calib_array},
+    calibration_method="max",
+    nodes_to_exclude=<layer 0-5 全部節點名稱>,
+    output_path="clip_vision.int8.exp10_quantize_back6.onnx",
+)
+```
+
+結果 (`outputs_logs/exp10_eval.log`):
+
+- cosine sim mean = 0.759286
+- cosine sim min  = 0.663037
+- cosine sim std  = 0.039732
+
+### 第一輪小結
+
+| 實驗 | 量化範圍 | mean | min | std |
+|---|---|---|---|---|
+| baseline | 全 12 層都量化 | 0.547456 | 0.479761 | 0.024778 |
+| exp9 | 只量化 layer 0-5(前 6 層) | 0.633780 | 0.538963 | 0.043417 |
+| exp10 | 只量化 layer 6-11(後 6 層) | 0.759286 | 0.663037 | 0.039732 |
+
+兩組都各自比 baseline(全部量化)好,符合「量化的節點變少,誤差變小」的
+方向。但兩組之間差距明顯:只量化前 6 層(exp9, mean 0.634)比只量化後
+6 層(exp10, mean 0.759)還要差——**從數字推論**,前 6 層(layer 0-5)
+單獨量化時貢獻的誤差,看起來比後 6 層(layer 6-11)單獨量化時大。std
+也是 exp9(0.043)比 exp10(0.040)大一些,前半段誤差看起來波動也比較大。
+
+依計畫,對「比較差的那組」繼續往下二分——也就是繼續切前 6 層
+(layer 0-5),分成前 3(layer 0-2)跟後 3(layer 3-5)。

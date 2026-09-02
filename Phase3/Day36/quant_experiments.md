@@ -855,3 +855,22 @@ nats(幾乎是雜訊等級),top-1 token 一致率 98.48%,跟 CLIP vision
 INT8 精度崩潰看起來是 `clip_vision.onnx` 這個特定 export
 (attention pattern 沒被 modelopt 認出來)的問題,不是「這整套 INT8
 量化流程對 transformer 架構普遍都很脆弱」。**
+
+## benchmark 收尾 — clip_vision FP32/FP16/INT8 延遲總表
+
+這張表的數字全部來自 exp17 已經跑過的 latency benchmark(`outputs_logs/
+exp17_eval.log`),這裡只是整理成一張表方便之後放 README/blog,沒有重測。
+INT8 用目前測過最好的版本(exp5 的 `disable_mha_qdq=True`)。固定亂數
+輸入,100 次 run(20 次 warmup),CPU EP 跟 CUDA EP(這台機器有 RTX 4070)
+都測了。
+
+| 精度 | 模型檔案 | CPU EP median (ms) | CUDA EP median (ms) | cosine sim vs FP32 |
+|---|---|---|---|---|
+| FP32 | `clip_vision.onnx` | 29.905 | 3.836 | 1.0(原始基準) |
+| FP16 | `clip_vision.fp16.onnx` | 56.202 | 3.359 | 0.999999(exp17) |
+| INT8 | `clip_vision.int8.exp5_disable_mha_qdq.onnx` | 339.466 | 12.470 | 0.555079(exp5) |
+
+**先把數字備齊,不下部署建議的結論**(那是等你判斷完機制之後的事)——
+從這張表能看到的純數字事實是:FP16 在 GPU(CUDA EP)上同時拿到「幾乎
+無損的精度」跟「比 FP32 快一點」;INT8(這份 QDQ export)不管在 CPU 還是
+GPU 上都比 FP32 慢,而且精度掉最多。

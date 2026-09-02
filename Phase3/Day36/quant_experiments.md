@@ -478,3 +478,62 @@ tag: `day38-exp12-bisect-layer3to5`
 layer 0-2 單獨量化(exp11, mean 0.679)比 layer 3-5 單獨量化(exp12,
 mean 0.813)差更多——跟第一輪的方向一致(越前面的層,量化後掉的精度
 越多)。continue 往 layer 0-2 裡繼續切:layer 0 單獨 vs layer 1-2。
+
+## exp13/exp14 — 第三輪 bisection:layer 0-2 裡再切 layer 0 / layer 1-2
+
+### exp13 — 只量化 layer 0,其餘(1-11)排除量化
+
+tag: `day38-exp13-bisect-layer0`
+
+`Total number of quantized nodes: 17`
+
+結果 (`outputs_logs/exp13_eval.log`):
+
+- cosine sim mean = 0.841682
+- cosine sim min  = 0.737047
+- cosine sim std  = 0.033980
+
+### exp14 — 只量化 layer 1-2,其餘(0,3-11)排除量化
+
+tag: `day38-exp14-bisect-layer1to2`
+
+`Total number of quantized nodes: 16`
+
+結果 (`outputs_logs/exp14_eval.log`):
+
+- cosine sim mean = 0.808206
+- cosine sim min  = 0.684352
+- cosine sim std  = 0.040841
+
+### 第三輪出現的異常現象——bisection 方法論的假設可能不成立
+
+**這一段是從數字推論,不是查出來的事實,而且是這輪 bisection 裡最值得
+在繼續切之前先回報的東西。**
+
+| 實驗 | 量化範圍 | mean |
+|---|---|---|
+| exp13 | 只量化 layer 0 | 0.841682 |
+| exp14 | 只量化 layer 1-2 | 0.808206 |
+| exp11 | 量化 layer 0-2(= layer0 + layer1-2 合起來) | 0.679399 |
+
+layer 0 單獨量化(0.842)跟 layer 1-2 單獨量化(0.808)**兩個分開測都
+遠比合在一起測(layer 0-2 一起量化,0.679)好**——而且 exp11 的 0.679
+甚至比 exp13、exp14 兩個「單獨的更差那個」(exp14 的 0.808)還要差很多。
+這不是簡單的「兩邊誤差相加」可以解釋的:如果誤差是每層獨立、線性疊加的,
+合起來的分數應該落在兩個單獨分數之間或接近較差的那個,而不是比兩個都
+明顯更差。
+
+同樣的現象在第一輪也看得到:exp9(前 6 層一起量化,mean 0.634)比
+exp11(其中 layer 0-2,mean 0.679)、exp12(其中 layer 3-5,mean 0.813)
+單獨測都差。
+
+**推論(不是定論)**:多層一起量化時,誤差可能不是每層獨立貢獻、線性
+加總,而是有交互作用——量化層 A 產生的誤差,可能會被下一個「也被量化」
+的層 B 放大或用非線性方式合成,而不是單純沿著殘差流累加。如果這個推論
+成立,原本 bisection 想找「哪一層是元兇」這個方法論的前提(誤差可以歸因
+到單一或少數幾層)可能本身就不成立——問題可能是「連續多層一起量化」這件
+事本身,而不是某一層特別敏感。
+
+**在這裡停下,不繼續切 layer 1 vs layer 2**,先回報這個現象,因為如果
+交互作用的推論是對的,繼續切下去很可能只會一直看到「合起來比分開差」
+的同一個模式,對定位問題沒有幫助,值得先跟你確認要不要換方法。

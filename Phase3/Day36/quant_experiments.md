@@ -744,3 +744,114 @@ int8 量化流程裡」——這條路不通,不用硬找替代方案。
 
 tag: `day38-exp18-smoothing-check`(這輪沒有新的量化產物,commit 只包含
 這份查證紀錄)
+
+## exp19 — 對 gpt.onnx(decoder)跑一次跟 exp1 一樣設定的 baseline INT8 量化
+
+**目的**:當一個對照組。如果 GPT decoder 的 INT8 精度掉得比 ViT 溫和,
+就能佐證「這是 ViT/CLIP attention-in-vision 特有的問題」,不是所有
+transformer 架構套這套流程都會這麼脆弱。
+
+### 資料準備(跟 clip vision 系列方法論一致)
+
+用 `captions_val.jsonl`(1097 筆,`config/data/*.yaml` 裡設定的
+`captions_val_path`)取代 clip vision 用的 holdout 圖片集,一樣
+`random.seed(1337)`、抽 500 筆當 calibration、剩下取前 200 筆當 holdout。
+每筆資料:
+
+- 圖片先過 `clip_vision.onnx`(FP32)得到 `img_feat`(1, 512)
+- caption 文字用 `minbpe.load("tokenizer.pkl")` tokenize,前面接
+  `image_token_id=318`、後面接 `eos_token_id=319`(數值跟 `config/data`
+  的 `base_vocab_size=318`、`special_token_size=2` 對得上,`GPT.py` 第
+  128 行 `tok_emb[:,0] = image_vector_emb[:]` 確認第 0 個 token 位置會被
+  換成圖片向量,不是普通文字 token)
+- 序列 `seq = [318] + caption_tokens + [319]`,`idx = seq[:-1]`,
+  `targets = seq[1:]`(標準 next-token 訓練/驗證用的位移方式)
+
+**API 踩坑(查程式碼確認的事實)**:decoder 的 `input_ids` 每筆長度不同
+(caption 長度不一樣),不能像 clip vision 那樣疊成單一固定 shape 的
+array,所以改用 `calibration_data_reader` 逐筆餵。第一次用標準
+`onnxruntime.quantization.calibrate.CalibrationDataReader` 介面(只實作
+`get_next()`)下去跑,直接噴:
+
+```
+AttributeError: 'GPTCalibrationReader' object has no attribute 'get_first'
+```
+
+追進 `modelopt/onnx/quantization/graph_utils.py`
+(`find_nodes_from_mha_to_exclude` → `get_extended_model_outputs`)確認它
+會呼叫 `calibration_data_reader.get_first()`——這不是標準 onnxruntime
+介面的一部分,是 modelopt 自己在
+`modelopt/onnx/quantization/calib_utils.py` 的
+`CalibrationDataProvider`/`RandomDataProvider` 額外加的方法。照那份原始
+碼補上 `get_first()` 跟 `rewind()`(entropy calibration 通常要不只一輪
+掃描,rewind 也一併補,不是猜的)後就能正常跑。
+
+### 量化設定(跟 exp1 一致:calibration_method="entropy",無額外排除)
+
+tag: `day38-exp19-gpt-decoder-baseline`
+
+```
+quantize(
+    onnx_path="gpt.onnx",
+    quantize_mode="int8",
+    calibration_data_reader=reader,
+    calibration_method="entropy",
+    output_path="gpt.int8.exp19_baseline.onnx",
+)
+```
+
+**量化 log 裡的一個重大對照事實(查 log 確認,不是推論)**:
+
+```
+Found 25 layer norm partitions
+Found 12 MHA (QK_AV) Patterns
+Total number of quantizable nodes: 50
+Final number of nodes to quantize: 48
+```
+
+`gpt.onnx` 的 12 層 attention block,modelopt **全部 12 個都成功辨識成
+MHA (QK_AV) pattern**——跟 `clip_vision.onnx` 系列實驗(exp1 到 exp16)
+每次都印出 `Found 0 MHA (QK_AV) Patterns` 形成鮮明對比。這代表 modelopt
+的 attention 保護機制(`mha_accumulation_dtype` 之類)在 GPT decoder 上
+是真的有生效的,在 CLIP vision 上完全沒生效——這兩個模型的 attention
+匯出方式顯然不一樣(`GPT.py` 用的是 `F.scaled_dot_product_attention`
+直接呼叫 torch 內建的 SDPA,`CLIPModel`〔HuggingFace transformers 套件〕
+內部的 attention 實作/匯出方式跟這個不同,才會讓 modelopt 認不出來)。
+
+### 指標選擇:為什麼用 cross-entropy loss + top-1 一致率,不是 cosine similarity
+
+CLIP vision 用 cosine similarity 是因為它的輸出(`img_feat`)是一個
+**連續的 embedding 向量**,下游用途就是拿去算向量距離/相似度,cosine
+similarity 直接對應這個用途。但 GPT decoder 的輸出是**每個位置的 vocab
+分布(logits)**,下游用途是拿去 softmax 之後 greedy/取樣出下一個
+token——真正決定生成結果的是「機率排序有沒有變」,不是「logit 向量的
+方向有沒有偏」。logit 的 cosine similarity 是弱代理指標:softmax 是非
+線性的,logit 量級小幅偏移可能翻動 argmax(而 cosine similarity 幾乎不
+會反映出來),也可能 cosine similarity 掉很多但 softmax 之後排序完全
+沒變。cross-entropy loss 直接是這個模型訓練時在最小化的量(`GPT.py`
+第 141 行 `F.cross_entropy(...)`),能直接反映量化後模型「預測正確 caption
+的能力」掉了多少;再搭配 top-1 token 一致率(INT8 跟 FP32 的 argmax 是否
+一樣),直接量測「每個位置的生成決策有沒有被量化改變」,是更貼近這個
+decoder 實際用途的指標。
+
+結果 (`outputs_logs/exp19_eval.log`):
+
+- FP32 cross-entropy loss: mean = 7.292551, std = 0.828097
+- INT8 cross-entropy loss: mean = 7.292819, std = 0.836055
+- loss 差值(INT8 − FP32): mean = 0.000267
+- top-1 token 一致率(INT8 argmax == FP32 argmax): 0.984843
+  (7667/7785 個位置)
+
+（附註:FP32 loss 本身 mean≈7.29 nats 偏高,比 vocab_size=320 的均勻亂猜
+基準 `ln(320)≈5.77` 還差,這代表這個 checkpoint 在這組 idx/targets 建構
+方式下算出來的 loss 不算低——但這不影響這裡要驗證的東西,因為 INT8 跟
+FP32 用的是完全一樣的資料建構方式,兩者的差值才是這裡真正要看的數字,
+不受這個絕對值高低影響。）
+
+**結論:GPT decoder 的 INT8 精度幾乎沒有掉。** loss 差值只有 0.000267
+nats(幾乎是雜訊等級),top-1 token 一致率 98.48%,跟 CLIP vision
+系列實驗(cosine similarity 卡在 0.55～0.85,連 disable_mha_qdq /
+排除 attention 都救不回來)完全是不同量級的結果。**這佐證了背景假設:
+INT8 精度崩潰看起來是 `clip_vision.onnx` 這個特定 export
+(attention pattern 沒被 modelopt 認出來)的問題,不是「這整套 INT8
+量化流程對 transformer 架構普遍都很脆弱」。**

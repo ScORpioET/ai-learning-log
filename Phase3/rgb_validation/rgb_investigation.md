@@ -667,3 +667,241 @@ RGB train 標註總數 n=169,174,其中 person 類別 n=35,007。
 **三個候選各自對應不同的校準哲學**(佔比一致 / 絕對面積一致 / 過濾強度
 一致),沒有哪一個是客觀上「正確」的,選哪個取決於接下來想優化的目標是
 什麼——這個判斷留給你,這份調查只負責把數字跟每個候選代表的意義攤開來。
+
+---
+
+# 任務 A8:thermal(filtered+reweight)vs RGB(filtered+reweight)平行訓練,同配方比較
+
+用同一套訓練配方,分別在 thermal(0.025% 過濾)跟 RGB(候選 (c),0.0191%
+過濾)上補訓「過濾 + x2 重加權」這個目前只驗證過部分組合的配方,產出三欄
+對照表。**不下「哪個比較好、該用哪個」的結論**,數字列出來,判斷留給你。
+
+程式碼:`Phase3/Day32/generate_captions_rgb.py`(其實放在
+`Phase3/rgb_validation/generate_captions_rgb.py`)、
+`Phase3/rgb_validation/precompute_clip_features_rgb.py`、
+`Phase3/Day32/evaluate_val_rgb.py`、
+`Phase3/Day32/position_binding_compare_day38.py`、
+`Phase3/Day32/config/data/rgb_filtered.yaml`。
+
+## Step 1:exp2_reweight2x 的配方(原封不動沿用,查 Hydra config/log 抄出來的事實)
+
+**重加權邏輯**(`Phase3/Day32/train_vlm.py` 第 400-413 行):
+
+- 判斷「雙子句樣本」的方式:caption 字串裡有沒有 `;`(v0.7+ class-first
+  模板用 `;` 分隔兩個子句,這是唯一的判斷依據,沒有額外解析句子結構)。
+- 加權倍數:雙子句樣本權重 `2.0`,其餘樣本權重 `1.0`。
+- 實作方式:`torch.utils.data.WeightedRandomSampler(weights, num_samples=
+  len(weights), replacement=True)`,取代原本的 `shuffle=True` DataLoader。
+- 觸發方式:opt-in flag,`+train.reweight_multi_position=true` +
+  `+train.multi_position_weight=2.0`,預設不開不影響既有行為。
+
+**訓練超參數**(`Phase3/Day32/outputs/2026-08-31/16-44-13/.hydra/config.yaml`,
+= `config/train/default.yaml` 的預設值,exp2 沒有另外覆寫任何一項):
+
+| 參數 | 值 |
+|---|---|
+| model: n_layer/n_head/n_embd | 12 / 12 / 768 |
+| model: block_size / vocab_size / clip_vector_size | 1024 / 320 / 512 |
+| data: B(batch size) | 8 |
+| data: T | 1024 |
+| data: total_batch_size | 524288 |
+| weight_decay | 0.1 |
+| max_lr | 3e-4 |
+| min_lr_ratio | 0.1 |
+| warmup_steps | 50 |
+| max_steps_increment | 1000 |
+| val_interval | 100 |
+| val_loss_steps | 20 |
+| seed | 1337 |
+| epoch | 10 |
+
+這兩節的內容原封不動照搬到 thermal 跟 RGB 兩個新的訓練 run,沒有調整任何
+數字。
+
+## Step 2:thermal 分支
+
+直接用既有的 `captions_train_filtered_v2.jsonl`/`captions_val_filtered_
+v2.jsonl`(A6 已驗證血統乾淨,沒有重新生成),套用上面的配方:
+
+```
+python train_vlm.py data=filtered_v2 \
+  train.ckpt_dir=checkpoints_filtered_v2_reweight2x \
+  train.ckpt_path=checkpoints_filtered_v2_reweight2x/best_model.pt \
+  train.log_dir=log_filtered_v2_reweight2x \
+  +train.reweight_multi_position=true +train.multi_position_weight=2.0
+```
+
+雙子句樣本:2,056 / 10,179(20.2%)。Loss 曲線(10 個 epoch,`dt` 是每個
+epoch 的秒數,GPU 是這台機器上的 RTX 4070):
+
+| epoch | train loss | val loss(該 epoch 之後量的) |
+|---:|---:|---:|
+| 0 | 0.5510 | 0.4002 |
+| 1 | 0.4188 | 0.4251 |
+| 2 | 0.4004 | 0.3966 |
+| 3 | 0.3866 | 0.4080 |
+| 4 | 0.3734 | 0.3948 |
+| 5 | 0.3561 | 0.3941 |
+| 6 | 0.3436 | 0.4006 |
+| 7 | 0.3309 | 0.4087 |
+| 8 | 0.3096 | 0.4146 |
+| 9 | 0.3032 | — |
+
+最佳 checkpoint:epoch 6,val_loss=0.3941。存成
+`Phase3/Day32/checkpoints/best_model_filtered_v2_reweight2x.pt`。
+
+tag:`day38-thermal-filtered-reweight-train`
+
+## Step 3:RGB 分支
+
+### 3a. 用規則模板腳本對 RGB 套用候選 (c) 門檻(0.019131944444444444%)生成 caption
+
+重用 `thermal_dataset/generate_captions.py` 的所有函式(`DYNAMIC_CLASSES`/
+`STATIC_CONTEXT_CLASSES`/`compute_area_thresholds`/`position_label`/
+`distance_label`/`build_caption`/`OCCLUDED_DIFFICULT`/`LONG_TAIL_*`,原封
+不動 import 重用,不重寫邏輯),只換掉 `main()` 裡硬編碼的
+`images_thermal_{split}` 路徑跟 `GLOBAL_MIN_AREA_PCT`(改成 A7 算出來的
+候選 (c) 精確值),對齊生成 `filtered_v2` 時同樣的做法(`--long-tail-
+ref-split train`,Day34 修復邏輯)。
+
+```
+python generate_captions_rgb.py --split train --out captions_rgb_train_filtered.jsonl
+python generate_captions_rgb.py --split val --long-tail-ref-split train --out captions_rgb_val_filtered.jsonl
+```
+
+結果:train 9,628 筆(10,318 張圖裡 690 張零物件被跳過)、val 1,002 筆
+(1,085 張圖裡 83 張零物件被跳過)。
+
+**一個查資料時發現的事實,跟原本以為的不一樣,如實記錄**:一開始以為 RGB
+的 `extra_info` 完全沒有 `weather` 欄位(A3 早期查一支影片的 metadata 時
+只看到 `hours`/`scene`/`video_id`,沒看到 `weather`),後來訓練時生成的
+caption 裡出現「Cloudy:」這個字樣,回去查證發現**RGB 其實有部分圖片有
+`weather` 欄位**(train 10,318 張裡 6,803 張、66.0% 有;val 1,085 張裡
+725 張、66.8% 有),只是不是每張都有——不是 bug,是先前只抽樣看了一支
+影片就下的錯誤印象,這裡更正。
+
+### 3b. 對 RGB 圖片用既有的 frozen CLIP 抽特徵(同一套流程,沒改架構)
+
+跟 `Phase3/Day32/precompute_clip_features.py` 完全相同的邏輯(同一個
+`openai/clip-vit-base-patch32`,同樣的 `get_image_features(**inputs).
+pooler_output`),只換 root 路徑成 `images_rgb_{split}`:
+
+```
+python precompute_clip_features_rgb.py --split train --captions captions_rgb_train_filtered.jsonl --out clip_features_rgb_train.pt
+python precompute_clip_features_rgb.py --split val --captions captions_rgb_val_filtered.jsonl --out clip_features_rgb_val.pt
+```
+
+train 9,628 張、val 1,002 張,輸出維度 512,跟 thermal 的特徵格式完全一致。
+
+### 3c. 訓練(跟 thermal 分支同一套配方,`config/data/rgb_filtered.yaml` 指向上面產出的檔案)
+
+```
+python train_vlm.py data=rgb_filtered \
+  train.ckpt_dir=checkpoints_rgb_filtered_reweight2x \
+  train.ckpt_path=checkpoints_rgb_filtered_reweight2x/best_model.pt \
+  train.log_dir=log_rgb_filtered_reweight2x \
+  +train.reweight_multi_position=true +train.multi_position_weight=2.0
+```
+
+雙子句樣本:2,084 / 9,628(21.6%)。Loss 曲線:
+
+| epoch | train loss | val loss(該 epoch 之後量的) |
+|---:|---:|---:|
+| 0 | 0.5248 | 0.3978 |
+| 1 | 0.3808 | 0.3769 |
+| 2 | 0.3571 | 0.3724 |
+| 3 | 0.3467 | 0.3676 |
+| 4 | 0.3293 | 0.3769 |
+| 5 | 0.3162 | 0.3866 |
+| 6 | 0.2989 | 0.3773 |
+| 7 | 0.2845 | 0.3866 |
+| 8 | 0.2693 | 0.3893 |
+| 9 | 0.2569 | — |
+
+最佳 checkpoint:epoch 4,val_loss=0.3676。存成
+`Phase3/Day32/checkpoints/best_model_rgb_filtered_reweight2x.pt`。
+
+tag:`day38-rgb-filtered-reweight-train`
+
+## 收斂行為對照(如實記錄,按指示不自己調參解決)
+
+兩邊都訓得乾淨——**都沒有 nan、沒有 loss 爆炸**,`norm_max` 全程維持在
+個位數到二十幾的合理範圍。但兩邊的收斂節奏有明顯差異:
+
+- **thermal**:val loss 在 epoch 5-6 觸底(0.3941~0.3948)之後,後面
+  4 個 epoch 緩慢回升到 0.40-0.41 帶,波動不大。
+- **RGB**:val loss 在 epoch 3(0.3676)就觸底,比 thermal 早 2-3 個
+  epoch;觸底之後回升得比 thermal 明顯更快、更多,epoch 4 就跳回
+  0.3769,epoch 8 到 0.3893,整體上升的斜率比 thermal 那段更陡。
+- 兩邊 train loss 到 epoch 9 都還在持續下降(thermal 0.3032、RGB
+  0.2569),RGB 的訓練終點 train/val 落差(0.2569 vs 最後一次量到的
+  0.3893,差 0.1324)比 thermal 的落差(0.3032 vs 0.4146,差 0.1114)
+  略大一點。
+
+**這是查數字確認的事實,不是推論出「RGB 過擬合更嚴重」這種結論**——
+兩邊資料量接近(RGB train 9,628 筆 vs thermal train 10,179 筆,只差
+5%),不是那種數量級差距會導致的典型 overfitting 對照組。RGB 觸底更早、
+回升更快這個現象本身值得注意,但沒有進一步分析原因(不同輸入域的
+CLIP 特徵分布/圖片本身細節密度不同,都可能是候選原因),依指示先如實
+回報,不嘗試調參數解決。
+
+## 五項量化評估指標對照表(Day34 方法論,`evaluate_val.py`)
+
+三欄都用同一支腳本(RGB 用只改了 `VAL_COCO_PATH`/`FEATURES_VAL_PATH`
+兩個路徑常數的 `evaluate_val_rgb.py`,其餘邏輯逐行相同)算出來,同一個
+`SEED=42`,`max_new_tokens=40`。thermal (full_v2+reweight2x) 這欄是重新
+跑一次既有 checkpoint 的 eval(不是沿用 08-31 當時的舊 CSV),確保三欄
+方法論完全一致。
+
+| 指標 | thermal (filtered+reweight,新) | thermal (full+reweight,既有基準 exp2) | RGB (filtered+reweight,新) |
+|---|---:|---:|---:|
+| checkpoint best epoch / val_loss | 6 / 0.3941 | 7 / 0.3872 | 4 / 0.3676 |
+| val set n | 1,096 | 1,097 | 1,002 |
+| 合法前綴率 | 0.9991 | 1.0000 | 0.9990 |
+| 前綴匹配率(Night/非Night 跟 GT 一致) | 0.8923 | 0.8915 | 0.9760 |
+| Night P/R/F1(全部樣本) | 0.4667 / 0.6481 / 0.5426 | 0.4486 / 0.4444 / 0.4465 | 0.9428 / 0.9843 / 0.9631 |
+| Night P/R/F1(hours 有標注樣本) | 0.9589 / 0.6481 / 0.7735 (n=231) | 0.9600 / 0.4444 / 0.6076 (n=231) | 0.9751 / 0.9843 / 0.9797 (n=988) |
+| 句型模板合規率 | 0.9799 | 0.9863 | 0.9800 |
+| 物件類別 precision(micro) | 0.6831 | 0.6950 | 0.7131 |
+| 物件類別 recall(micro) | 0.7570 | 0.7621 | 0.7407 |
+| 物件類別 f1(micro) | 0.7181 | 0.7270 | 0.7267 |
+| 生成長度 mean/median/p95(token) | 12.38 / 10.0 / 23.0 | 12.12 / 10.0 / 21.2 | 12.88 / 11.0 / 23.0 |
+| GT 長度 mean/median/p95(token) | 11.16 / 10.0 / 20.0 | 11.10 / 10.0 / 20.0 | 12.26 / 10.0 / 22.0 |
+| EOS 命中率 | 1.0000 | 1.0000 | 1.0000 |
+
+**一個影響 Night 指標可比性的資料事實(查資料確認,不是推論)**:RGB
+val 的 `extra_info.hours` 幾乎每張都有標(988/1002,98.6% 有明確標注);
+thermal val 的 `hours` 標注覆蓋率低很多(231/1097,只有 21.1% 有明確
+標注,其餘 865 筆 `hours` 是空字串、被「全部樣本」那欄的計算方式當成
+「非 night」處理)。這代表 thermal 兩欄「全部樣本」的 Night P/R/F1
+被大量沒有標注的樣本稀釋,RGB 那欄幾乎沒有這個稀釋效應——**兩欄「全部
+樣本」的 Night 數字不是在同樣的資料完整度基礎上比的**,「hours 有標注」
+那欄樣本數也因此差了 4 倍(RGB 988 筆 vs thermal 231 筆),解讀這兩欄
+對照時要注意這個前提不一樣,不是模型能力的直接落差。
+
+## Position-Class Binding Accuracy 對照表(Day35/36 方法論)
+
+三個 CSV 都用同一個 `position_binding_accuracy.py` 的 `run()` 函式(style
+統一用 `"v7"`,三個 checkpoint 生成的句子都是 v0.7+ class-first 模板),
+邏輯沒有改動,只是換了要跑的三個檔案。
+
+| 指標 | thermal (filtered+reweight,新) | thermal (full+reweight,既有基準 exp2) | RGB (filtered+reweight,新) |
+|---|---:|---:|---:|
+| n | 1,096 | 1,097 | 1,002 |
+| GT clause parse 成功率 | 100.00% | 100.00% | 100.00% |
+| 生成句 clause parse 成功率 | 98.53% | 98.92% | 98.27% |
+| class-position 正確(correct) | 332 | 397 | 323 |
+| class-position 錯位(mismatch) | 199 | 168 | 155 |
+| position 缺失(missing,GT 有生成沒有) | 753 | 700 | 683 |
+| position 多餘(extra,生成有 GT 沒有) | 875 | 810 | 712 |
+| 同位置有配對的總數(position_matched) | 531 | 565 | 478 |
+| **Position-Class Binding Accuracy** | **62.52%** | **70.27%** | **67.57%** |
+| **Class-Position 錯位率** | **37.48%** | **29.73%** | **32.43%** |
+
+## 小結
+
+按指示不下「哪個比較好、該用哪個」的結論——上面兩張表把 thermal
+(filtered+reweight,新)、thermal(full+reweight,既有基準)、RGB
+(filtered+reweight,新)三欄數字都列出來了,唯一額外標注出來的是「RGB
+收斂節奏比 thermal 快、Night 指標的兩欄樣本完整度不對等」這兩個查數字
+確認的事實,供你判斷時參考,不是這份調查自己下的評價。

@@ -131,3 +131,58 @@ quantize(
 `autotune_*` 等等都還沒試過,但這些屬於「繼續猜參數」,照要求先停在這裡
 回報,交給你決定要不要往這個方向繼續,還是要先確認 MHA pattern 辨識失敗
 這件事。
+
+---
+
+# Day38:路線 A——針對「MHA pattern 辨識失敗」關掉 attention QDQ
+
+假設:既然 modelopt 認不出這份 export 出來的 CLIP attention pattern、
+沒辦法用它自己的保護機制處理,那能不能直接關掉 attention 部分的 QDQ
+插入,讓崩潰的根源不被量化。
+
+判定標準:cosine similarity mean 回到 0.95+ 才算解決。
+
+## exp5 — disable_mha_qdq=True(其餘跟 baseline 一致:calibration_method="max",無 op exclude)
+
+tag: `day38-exp5-disable-mha-qdq`
+
+```
+quantize(
+    onnx_path="clip_vision.onnx",
+    quantize_mode="int8",
+    calibration_data={"pixel_values": calib_array},
+    calibration_method="max",
+    disable_mha_qdq=True,
+    output_path="clip_vision.int8.exp5_disable_mha_qdq.onnx",
+)
+```
+
+結果 (`outputs_logs/exp5_eval.log`):
+
+- cosine sim mean = 0.555079
+- cosine sim min  = 0.487913
+- cosine sim std  = 0.024990
+
+**結論:沒解決。** mean 0.547456 → 0.555079,幾乎沒變(在 std ~0.025 的
+雜訊範圍內),離 0.95 目標非常遠。
+
+量化 log 裡的異常(`outputs_logs/exp5_quantize.log`):
+
+- log 明確印出 `Disabling QDQ for all MHA nodes`,代表 `disable_mha_qdq`
+  這個參數確實被觸發、執行了「關閉 MHA QDQ」這個動作。
+- 但同一次執行仍然印出 `Found 0 MHA (QK_AV) Patterns`——也就是說,
+  modelopt 一開始就沒辨識出任何 MHA pattern,`disable_mha_qdq` 這個開關
+  是作用在「它認得的 MHA 節點」上,而這份圖裡它認得的 MHA 節點數量是 0。
+  這跟 exp2 裡「排除一個從沒被量化的 op type」是類似的情況:操作本身有
+  被執行,但可能沒有實際節點可以作用。
+- 量化節點數:`Total number of quantized nodes: 147`(exp5,
+  calibration_method=max + disable_mha_qdq)。跟 exp1
+  (`calibration_method=entropy`,無 op exclude)的 171 個相比少了 24 個,
+  跟 exp2(entropy + exclude LayerNorm/Softmax)的 170 個也不同。有變化,
+  但精度分數幾乎沒有跟著變,所以這個節點數差異看起來跟精度問題無關
+  (或至少不是主導因素)——如實記錄這個現象,不下定論。
+- 新增觀察:log 裡出現 `Converting float32 tensors to fp16`,是這次執行
+  才出現的訊息(exp1、exp2 的 log 裡沒有)。目前不確定觸發條件是什麼,
+  記錄下來供之後比對。
+
+**mean < 0.9,依計畫進 exp6。**

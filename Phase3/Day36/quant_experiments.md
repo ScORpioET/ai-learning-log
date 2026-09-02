@@ -298,3 +298,65 @@ matmul 的 QDQ,只是它自己 log 出來的 `Found 0 MHA (QK_AV) Patterns` 講�
 
 五個實驗的 mean 全部卡在 0.52～0.56 之間,沒有一個接近 0.9,更不用說 0.95
 的目標。是否要換路線,由你判斷。
+
+---
+
+# Day38 延伸:定位真正根因
+
+exp5 跟 exp7 數字完全一致,證明「排除 attention 量化」這個操作本身有確實
+執行,但沒解決精度問題 → attention matmul 量化被證偽不是主因,不再往這裡
+查。以下兩條路徑改用 Day25-28 的節點級因果鏈方法論定位。
+
+## exp8 — 校準資料 vs holdout 前處理一致性檢查(純程式碼比對,沒有重跑量化)
+
+**這節的結論全部是「查程式碼確認的事實」,不是從數字推論。**
+
+比對兩份程式碼實際呼叫的前處理路徑:
+
+- Calibration(`test.py` 第 12、26-29 行):
+  `processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)` →
+  `img = Image.open(img_path).convert("RGB")` →
+  `processor(images=[img], return_tensors="pt")` →
+  `inputs["pixel_values"].numpy()`
+- Holdout 驗證(`eval_accuracy.py` 第 13、28-30 行,`profile_engine.py`
+  同樣寫法):
+  `processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)` →
+  `img = Image.open(img_path).convert("RGB")` →
+  `processor(images=[img], return_tensors="pt")` →
+  `inputs["pixel_values"].numpy()`
+
+兩邊**沒有各自寫一份前處理函式/class**——都是直接呼叫同一個
+`transformers.CLIPProcessor`(同一個 model name
+`"openai/clip-vit-base-patch32"`,兩份檔案裡字串常數逐字相同),呼叫方式
+逐行相同。搜尋整個 `Phase3/Day36/` 目錄沒有找到任何 local
+`preprocessor_config.json` 或其他 override 這個 processor 設定的檔案,
+`config/` 目錄裡的內容是 GPT decoder 訓練用的 hydra config,跟 CLIP
+processor 無關。
+
+實際印出這個 processor 當下解析出來的前處理參數(用同一支
+`openai/clip-vit-base-patch32` 跑出來的真實數值,不是文件上的預設值):
+
+| 項目 | 數值 |
+|---|---|
+| resize | shortest_edge=224,resample=bicubic(PIL 3) |
+| center crop | 224×224 |
+| rescale | 先除以 255(rescale_factor=1/255) |
+| normalize mean | (0.48145466, 0.4578275, 0.40821073) |
+| normalize std | (0.26862954, 0.26130258, 0.27577711) |
+| channel order | RGB(兩邊都先 `.convert("RGB")` 才丟進 processor) |
+| 輸出 dtype / shape | float32,(1, 3, 224, 224) |
+| 輸出數值範圍(實測) | 約 -1.78 ~ 2.15(normalize 後,不是 0-1 或 0-255) |
+
+因為兩邊呼叫的是同一個 `processor` 物件邏輯(同一個 class、同一個
+pretrained config、同一個呼叫方式),上面這張表對 calibration 跟 holdout
+兩邊完全適用,不存在「兩邊各自維護一份、可能不一致」的風險。
+
+**結論:沒有發現前處理不一致。** calibration 跟 holdout 用的是同一支
+`CLIPProcessor`、同一份設定、同一種呼叫方式,resize/normalize/channel
+order/數值範圍/dtype 全部相同。這條假設查完沒有發現問題,不是「差異量級
+不夠解釋崩潰」,而是**根本沒有差異**。
+
+tag: `day38-exp8-preprocessing-check`(這輪沒有新的 onnx 產物,commit 只
+包含這份紀錄)
+
+進 exp9:前處理排除後,回到 Day25-28 的逐層 bisection 找根因。

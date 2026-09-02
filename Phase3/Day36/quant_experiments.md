@@ -438,3 +438,43 @@ quantize(
 
 依計畫,對「比較差的那組」繼續往下二分——也就是繼續切前 6 層
 (layer 0-5),分成前 3(layer 0-2)跟後 3(layer 3-5)。
+
+## exp11/exp12 — 第二輪 bisection:layer 0-5 裡再切前 3 / 後 3
+
+節點切分方式跟上一輪一樣(用 pre-attn LayerNormalization 邊界,查程式碼
+確認的事實),只是這輪把其餘 9 層全部排除,只留 3 層量化。
+
+### exp11 — 只量化 layer 0-2,其餘(3-11)排除量化
+
+tag: `day38-exp11-bisect-layer0to2`
+
+`Total number of quantized nodes: 45`
+
+結果 (`outputs_logs/exp11_eval.log`):
+
+- cosine sim mean = 0.679399
+- cosine sim min  = 0.581472
+- cosine sim std  = 0.038937
+
+### exp12 — 只量化 layer 3-5,其餘(0-2,6-11)排除量化
+
+tag: `day38-exp12-bisect-layer3to5`
+
+`Total number of quantized nodes: 23`
+
+結果 (`outputs_logs/exp12_eval.log`):
+
+- cosine sim mean = 0.813260
+- cosine sim min  = 0.701619
+- cosine sim std  = 0.042004
+
+### 第二輪小結(從數字推論)
+
+| 實驗 | 量化範圍 | mean | min |
+|---|---|---|---|
+| exp11 | 只量化 layer 0-2 | 0.679399 | 0.581472 |
+| exp12 | 只量化 layer 3-5 | 0.813260 | 0.701619 |
+
+layer 0-2 單獨量化(exp11, mean 0.679)比 layer 3-5 單獨量化(exp12,
+mean 0.813)差更多——跟第一輪的方向一致(越前面的層,量化後掉的精度
+越多)。continue 往 layer 0-2 裡繼續切:layer 0 單獨 vs layer 1-2。

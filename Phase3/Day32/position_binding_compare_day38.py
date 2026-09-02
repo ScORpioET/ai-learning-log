@@ -8,8 +8,9 @@ from position_binding_accuracy import run
 
 targets = [
     ("eval_val_results_exp2_reweight2x_rerun.csv", "v7", "thermal (full_v2 + reweight2x, 既有基準)"),
-    ("eval_val_results_filtered_v2_reweight2x.csv", "v7", "thermal (filtered_v2 + reweight2x, 這次新的)"),
-    ("eval_val_results_rgb_filtered_reweight2x.csv", "v7", "RGB (filtered + reweight2x, 這次新的)"),
+    ("eval_val_results_filtered_v2_reweight2x.csv", "v7", "thermal (filtered_v2 + reweight2x)"),
+    ("eval_val_results_rgb_filtered_reweight2x.csv", "v7", "RGB (filtered + reweight2x)"),
+    ("eval_val_results_rgb_full_reweight2x.csv", "v7", "RGB (full + reweight2x, 這次新的)"),
 ]
 
 results = {}
@@ -22,7 +23,7 @@ for csv_path, style, label in targets:
           f"gen_parse={res['gen_clause_parse_rate']*100:.2f}%  "
           f"n={res['n']}")
 
-with open("position_binding_day38.json", "w") as f:
+with open("position_binding_day38_4way.json", "w") as f:
     json.dump(
         {k: {kk: vv for kk, vv in v.items() if kk != "case_records"} for k, v in results.items()},
         f, indent=2,

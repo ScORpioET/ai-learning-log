@@ -905,3 +905,169 @@ thermal val 的 `hours` 標注覆蓋率低很多(231/1097,只有 21.1% 有明確
 (filtered+reweight,新)三欄數字都列出來了,唯一額外標注出來的是「RGB
 收斂節奏比 thermal 快、Night 指標的兩欄樣本完整度不對等」這兩個查數字
 確認的事實,供你判斷時參考,不是這份調查自己下的評價。
+
+# 任務 A9:RGB 全量版(filtered+reweight vs full+reweight)補測,完成 2×2 對照
+
+背景:A8 已經證實 thermal「過濾+重加權」比「全量+重加權(既有基準
+exp2)」在 Position-Class Binding Accuracy 上差 7.75pp(62.52% vs
+70.27%)。這次補 RGB 的全量版,湊齊「thermal/RGB × 全量/過濾」2×2
+對照,單純補數字,不下結論。
+
+## Step 1:RGB 全量版 caption 生成(對齊 thermal full_v2 的生成邏輯)
+
+沿用 `thermal_dataset/generate_captions.py` 的原始邏輯,但**不套用任何
+tiny-bbox 面積門檻**——這是查程式碼確認的事實:`full_v2` 是在
+`--filter-tiny` 沒開啟的情況下生成的(`filter_tiny=False` 時,
+`generate_captions.py` 第 520-522 行的 `area_pct < GLOBAL_MIN_AREA_PCT`
+判斷完全不會被執行,見任務 A5)。新腳本
+`Phase3/rgb_validation/generate_captions_rgb_full.py` 是
+`generate_captions_rgb.py` 拿掉這段面積過濾判斷後的版本,其餘
+(long-tail 修復、position/distance label、`build_caption`)逐行照抄
+不改。
+
+```
+python generate_captions_rgb_full.py --split train --out captions_rgb_train_full.jsonl
+python generate_captions_rgb_full.py --split val --long-tail-ref-split train --out captions_rgb_val_full.jsonl
+```
+
+結果:train 9,656 筆(10,318 張圖,662 張零物件跳過)、val 1,004 筆
+(1,085 張圖,81 張零物件跳過)。比對過濾版(train 9,628 / val
+1,002),全量版確實比過濾版多收了一些原本被面積門檻濾掉之後歸零物件的
+圖(train +28、val +2),方向符合預期。
+
+## Step 2:CLIP 特徵——沿用既有的、不重算(查資料確認的覆蓋率)
+
+如指示,圖片本身沒變,只有 caption 的過濾邏輯不同,直接沿用 A8 訓練
+RGB 過濾版時已經算好的 `clip_features_rgb_{train,val}.pt`(來源:
+`precompute_clip_features_rgb.py`,對 `images_rgb_{train,val}` 全部圖片
+算好的 frozen CLIP pooled 512 維特徵)。
+
+**查證覆蓋率的事實(不是假設)**:全量版 caption 檔比過濾版多出的那些
+圖(train 28 張、val 2 張),剛好就是當初過濾版生成時因為面積門檻被濾到
+零物件、因此沒被收進過濾版 caption 檔的那些圖——這些圖的 CLIP 特徵在
+上次也**沒有**被算進 `clip_features_rgb_*.pt`(特徵檔是照過濾版 caption
+檔案裡的 `file_name` 清單去抓圖算的)。也就是 train 9,656 筆全量
+caption 裡有 28 筆(0.29%)、val 1,004 筆裡有 2 筆(0.20%)找不到對應
+特徵。這不是需要處理的 bug——`train_vlm.py` 的 `CaptionDataset`
+(`Phase3/Day32/train_vlm.py:311-313`)本來就會把找不到特徵的樣本自動
+丟掉並印警告,行為跟「沿用既有特徵、不重算」的指示一致,這裡只是誠實
+記錄這個極小比例的資料落差,沒有另外處理。
+
+## Step 3:訓練(跟 A8 同一套配方,`config/data/rgb_full.yaml` 指向上面產出的檔案)
+
+```
+python train_vlm.py data=rgb_full \
+    train.ckpt_dir=checkpoints_rgb_full_reweight2x \
+    train.ckpt_path=checkpoints_rgb_full_reweight2x/best_model.pt \
+    train.log_dir=log_rgb_full_reweight2x \
+    +train.reweight_multi_position=true \
+    +train.multi_position_weight=2.0
+```
+
+雙子句判斷、x2 權重、`WeightedRandomSampler`、其餘超參數(B=8, T=1024,
+total_batch_size=524288, max_lr=3e-4, epoch=10 等)跟 A8 的 thermal/RGB
+分支完全相同,沒有調整任何數字。
+
+實際套用重加權的樣本數:1,916/9,628(19.9%)——分母是 9,628 不是
+9,656,因為上面 Step 2 提到的 28 筆缺特徵樣本已被 `CaptionDataset`
+自動丟棄。
+
+| epoch | train loss | val loss |
+|---|---:|---:|
+| 0 | 0.5216 | 0.4094 |
+| 1 | 0.3780 | 0.3788 |
+| 2 | 0.3544 | **0.3544** ← best |
+| 3 | 0.3366 | 0.3728 |
+| 4 | 0.3256 | 0.3772 |
+| 5 | 0.3101 | 0.3596 |
+| 6 | 0.2935 | 0.3697 |
+| 7 | 0.2785 | 0.3747 |
+| 8 | 0.2670 | 0.3752 |
+| 9 | 0.2520 | 0.3804 |
+
+`best_model.pt` = epoch 2,val_loss=0.3544,全程沒有 nan/loss 爆炸,
+`norm_max` 在 5.6~35.3 之間(第 2 個 epoch 出現一次 35.3 的尖峰,單一
+樣本內少見但沒有連鎖發散,後續 epoch 隨即回落到個位數~二十幾)。
+
+checkpoint 已複製到 `Phase3/Day32/checkpoints/best_model_rgb_full_reweight2x.pt`
+(gitignore `*.pt`,不進版控)。
+
+## 收斂行為對照(四組一起看,如實記錄,不調參)
+
+| | best epoch | best val_loss | 觸底後回升幅度(到 epoch 9) |
+|---|---:|---:|---:|
+| thermal filtered+reweight | 6 | 0.3941 | +0.0205(→0.4146) |
+| thermal full+reweight(exp2) | 7 | 0.3872 | 資料見 A8,回升幅度小 |
+| RGB filtered+reweight | 4 | 0.3676 | +0.0217(→0.3893,A8 記錄) |
+| RGB full+reweight | 2 | 0.3544 | +0.0260(→0.3804) |
+
+**查數字確認的事實**:RGB 全量版觸底得比 RGB 過濾版還要更早(epoch 2
+vs 4),也比兩個 thermal 版本都早很多(epoch 6、7)。四組裡 RGB
+全量版是觸底最早、且觸底後回升幅度(以 best→epoch9 的差值算)最大的
+一組。這個現象跟 A8 記錄的「RGB 比 thermal 觸底早、回升快」的模式方向
+一致,而且在全量版上更明顯——但這仍然只是如實記錄現象,**不做「為什麼」
+的診斷、不嘗試調參解決**,原因分析(不同輸入域的 CLIP 特徵分布/圖片
+細節密度等)留待你判斷。
+
+## Step 4:評估(Day34 五項量化指標 + Day35/36 Position-Class Binding Accuracy)
+
+用跟 A8 完全相同的 `evaluate_val_rgb.py`(邏輯沒有改動,只是這次要
+明確傳 `--val-captions captions_rgb_val_full.jsonl` 跟
+`--train-captions captions_rgb_train_full.jsonl`,因為腳本預設路徑指向
+的是過濾版檔名)跟同一支 `position_binding_accuracy.py`(`run()`
+函式,style 統一 `"v7"`),同一個 `SEED=42`。
+
+### 五項量化評估指標對照表(四欄)
+
+| 指標 | thermal filtered+reweight | thermal full+reweight(既有基準 exp2) | RGB filtered+reweight | RGB full+reweight(這次新的) |
+|---|---:|---:|---:|---:|
+| checkpoint best epoch / val_loss | 6 / 0.3941 | 7 / 0.3872 | 4 / 0.3676 | 2 / 0.3544 |
+| val set n | 1,096 | 1,097 | 1,002 | 1,002 |
+| 合法前綴率 | 0.9991 | 1.0000 | 0.9990 | 0.9920 |
+| 前綴匹配率(Night/非Night 跟 GT 一致) | 0.8923 | 0.8915 | 0.9760 | 0.9800 |
+| Night P/R/F1(全部樣本) | 0.4667 / 0.6481 / 0.5426 | 0.4486 / 0.4444 / 0.4465 | 0.9428 / 0.9843 / 0.9631 | 0.9515 / 0.9874 / 0.9691 |
+| Night P/R/F1(hours 有標注樣本) | 0.9589 / 0.6481 / 0.7735 (n=231) | 0.9600 / 0.4444 / 0.6076 (n=231) | 0.9751 / 0.9843 / 0.9797 (n=988) | 0.9721 / 0.9874 / 0.9797 (n=988) |
+| 句型模板合規率 | 0.9799 | 0.9863 | 0.9800 | 0.9491 |
+| 物件類別 precision(micro) | 0.6831 | 0.6950 | 0.7131 | 0.7183 |
+| 物件類別 recall(micro) | 0.7570 | 0.7621 | 0.7407 | 0.7833 |
+| 物件類別 f1(micro) | 0.7181 | 0.7270 | 0.7267 | 0.7494 |
+| 生成長度 mean/median/p95(token) | 12.38 / 10.0 / 23.0 | 12.12 / 10.0 / 21.2 | 12.88 / 11.0 / 23.0 | 13.33 / 11.0 / 23.0 |
+| GT 長度 mean/median/p95(token) | 11.16 / 10.0 / 20.0 | 11.10 / 10.0 / 20.0 | 12.26 / 10.0 / 22.0 | 12.15 / 10.0 / 22.0 |
+| EOS 命中率 | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+
+Night 指標可比性的資料完整度落差(A8 已記錄的事實,這裡同樣適用)：
+RGB val 的 `hours` 標注覆蓋率 98.6%(988/1002),thermal val 只有
+21.1%(231/1097)——RGB 兩欄的「全部樣本」Night 數字幾乎沒有被無標注
+樣本稀釋,thermal 兩欄有,解讀時仍要注意這個前提不對等，不是模型能力
+的直接落差。
+
+### Position-Class Binding Accuracy 對照表(四欄)
+
+| 指標 | thermal filtered+reweight | thermal full+reweight(既有基準 exp2) | RGB filtered+reweight | RGB full+reweight(這次新的) |
+|---|---:|---:|---:|---:|
+| n | 1,096 | 1,097 | 1,002 | 1,002 |
+| GT clause parse 成功率 | 100.00% | 100.00% | 100.00% | 100.00% |
+| 生成句 clause parse 成功率 | 98.53% | 98.92% | 98.27% | 95.98% |
+| class-position 正確(correct) | 332 | 397 | 323 | 332 |
+| class-position 錯位(mismatch) | 199 | 168 | 155 | 126 |
+| position 缺失(missing) | 753 | 700 | 683 | 691 |
+| position 多餘(extra) | 875 | 810 | 712 | 760 |
+| **Position-Class Binding Accuracy** | **62.52%** | **70.27%** | **67.57%** | **72.49%** |
+| **Class-Position 錯位率** | **37.48%** | **29.73%** | **32.43%** | **27.51%** |
+
+（`case_records` 明細寫在 `Phase3/Day32/position_binding_day38_4way.json` 裡。）
+
+## 2×2 全貌(四個數字並排,不下結論)
+
+| Position-Class Binding Accuracy | filtered | full |
+|---|---:|---:|
+| thermal | 62.52% | 70.27% |
+| RGB | 67.57% | 72.49% |
+
+四個角落都有數字了。查數字確認的事實：這一輪兩個 domain 都是 full 版
+的 Binding Accuracy 比 filtered 版高（thermal +7.75pp、RGB +4.92pp），
+而且不管 filtered 或 full，RGB 這欄都比對應的 thermal 欄高一點
+（filtered: +5.05pp、full: +2.22pp）。這是四個數字擺在一起看到的
+現象，不是這份調查自己下的「應該用哪個版本」評價——如指示，不自己
+選最終要用的版本，判斷留給你。
+

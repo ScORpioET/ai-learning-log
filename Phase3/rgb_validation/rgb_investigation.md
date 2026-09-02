@@ -325,3 +325,134 @@ diff=77 的 SUSPECT 案例(thermal 49 個 bbox vs RGB 只有 2 個),兩張圖肉
 兩張圖肉眼看是同一個巴黎街景、同一台車在同一個位置——這兩組個案支持這個
 差異分數的排序方向是有意義的,但只查了 2 組,不能代表全部 40+40 張的情況,
 其餘案例需要另外人工複核。
+
+---
+
+# 任務 A5:GLOBAL_MIN_AREA_PCT 門檻數字溯源(0.05% vs 0.025%)
+
+背景:`learning-plan.md` 記錄的 Day35 決策是「0.05% global threshold」,但
+`thermal_dataset/generate_captions.py` 裡實際生效的常數是 0.025%,要查清楚
+哪個是真的、為什麼對不上。
+
+**第一個查到的事實**:這個環境裡找不到 `learning-plan.md` 這個檔案——查過
+`git log --all` 整個 repo 歷史(含已刪除的檔案)、`find /home/jack` 整個
+家目錄、`find /` 全機掃描,都沒有任何叫這個名字的檔案。所以下面沒辦法
+直接打開 `learning-plan.md` 核對它現在寫的是什麼、有沒有更新過——只能
+查這個 repo 裡實際留下的紀錄跟程式碼歷史,推論最可能的情況是什麼。
+
+## git log -p 查證:GLOBAL_MIN_AREA_PCT 改過幾次、什麼時候、為什麼
+
+`thermal_dataset/generate_captions.py` 目前在這個 branch 的完整歷史只有
+兩次 commit 動過(`git log --oneline --all -- thermal_dataset/
+generate_captions.py`):
+
+| commit | 時間 | 訊息 | `GLOBAL_MIN_AREA_PCT` 值 |
+|---|---|---|---|
+| `a6f5a8f` | 2026-08-31 15:39:27 +0800 | "baseline before day36 course-time experiments"(第一次把這個檔案加進 git,625 行全新增) | 0.05 |
+| `82023c6` | 2026-08-31 16:15:54 +0800(比上面晚 36 分鐘,同一天) | "Task 1: fix GLOBAL_MIN_AREA_PCT (0.05->0.025) to stop conflicting with far_thresh; far retention 0%->39.7%/47.2%; regenerated captions_{train,val}_filtered_v2.jsonl" | 0.025 |
+
+`a6f5a8f` 的 commit body 講得很清楚:這次 commit 是把「Day35/36 到目前為止
+的分析程式」一次性補進 git(之前 `.gitignore` 寫太寬,把
+`generate_captions.py` 本體排除在外了)。所以**這裡看不到 0.05% 這個值
+在 Day35 當時實際被設定的那一刻**(那次修改沒有進 git 歷史),只能確認
+「這個檔案第一次被 git 追蹤時,值是 0.05%」——跟 `day35_36_summary_for_
+decision.md` 第 35 行「Jack 決定改用單一 `GLOBAL_MIN_AREA_PCT = 0.05%`」
+的敘述吻合,可以合理推斷這就是 Day35 決策當下設的值。
+
+`82023c6` 的 diff 內容(`git log -p`)顯示改動很單純:把常數從
+`GLOBAL_MIN_AREA_PCT = 0.05` 改成 `GLOBAL_MIN_AREA_PCT = 0.025`,同時
+commit message 裡的原因寫得很明確——0.05% 這個門檻比
+`compute_area_thresholds()` 動態算出來的 `far_thresh`(train 0.0427%/
+val 0.0464%)還大,數學上必然讓所有 far 距離物件被過濾條件"順便"連坐濾掉
+(因為 tiny-bbox 過濾門檻設得比 far 距離的定義門檻還高,遠距離物件的框
+本來就小,會被無差別當成 tiny 濾掉),導致訓練資料裡雙子句 caption 比例
+從 94.7% 崩到 23.8%。這跟 `generate_captions.py` 檔案內目前的註解(第
+147-155 行,先前 A2 查證時已經讀過)完全吻合,兩份獨立紀錄(commit
+message + 程式碼內註解)彼此對得上,不是我自己編的說法。
+
+## 三個可能性的判斷
+
+背景問了三種可能:(1) 後來刻意調整過,只是 learning-plan.md 沒同步更新;
+(2) 本來就沒改過,0.05% 從一開始就記錄錯;(3) 有兩個地方各自定義門檻,
+實際生效的跟原本設計的不是同一個。
+
+**查證結果支持第 (1) 種**,而且證據很直接:
+
+- 有明確的一次程式碼修改(`82023c6`),不是「本來就沒改過」——排除(2)。
+- 這個 repo 裡目前找到的唯一一份門檻常數定義
+  (`thermal_dataset/generate_captions.py` 的 `GLOBAL_MIN_AREA_PCT`),
+  沒有查到第二個地方另外定義了一份不同的門檻常數——排除(3)(至少在
+  `generate_captions.py` 這個產生訓練資料用的腳本範圍內是這樣;沒有
+  往外查整個 repo 是否有其他腳本各自硬編了自己的門檻數字,這點沒有
+  做窮舉)。
+- Commit 訊息、程式碼內註解、`day35_36_summary_for_decision.md` 三份
+  獨立紀錄的敘述完全一致(0.05% 先訂、跟 far_thresh 打架、改成
+  0.025%),不是各說各話。
+
+**但沒辦法 100% 確認的部分**:因為找不到 `learning-plan.md` 本體,無法
+直接證實「它現在真的還寫著 0.05% 沒更新」這件事,只能說——如果
+`learning-plan.md` 是在 Day35 當下記下 0.05% 這個決策、之後沒有因為
+Day36 這次 bugfix 回頭修改,那就是（1）「刻意調整過,紀錄沒同步」;
+如果 `learning-plan.md` 其實在別的地方(這個 repo 外,或另一台機器)
+已經有更新,只是這個環境看不到最新版本,那就是**這份查證的環境限制**,
+不是真的沒同步。這個環境目前掌握的證據只能證明「in-repo 的紀錄本身是
+一致的、有跡可循的」,證明不了 `learning-plan.md` 這份外部文件現在寫的
+是什麼。
+
+## GT-filtered checkpoint(`best_model_exp2_reweight2x.pt`)實際用哪個門檻訓練
+
+**這裡查到一個比「哪個門檻數字對」更根本的問題**:`best_model_exp2_
+reweight2x.pt` 這個 checkpoint,**訓練資料根本沒有套用 tiny-bbox 面積
+過濾**——不是 0.05% 也不是 0.025%,是完全沒過濾。
+
+查證過程(不是只看現在程式碼長怎樣,是往回追訓練當下實際用的資料跟指令):
+
+1. `Phase3/Day32/outputs/2026-08-31/16-44-13/.hydra/overrides.yaml`(這個
+   run 的 checkpoint 存到 `checkpoints_exp2_reweight2x/best_model.pt`,
+   跟 `Phase3/Day32/checkpoints/best_model_exp2_reweight2x.pt` 檔名對得
+   上、mtime `2026-08-31 16:50:59` 也接在這個 run 之後,確認是同一個
+   checkpoint)裡明寫 `data=full_v2`。
+2. `Phase3/Day32/config/data/full_v2.yaml` 對應的 `captions_train_path`
+   是 `captions_train_full_v2.jsonl`(在 `.hydra/config.yaml` 裡確認過)。
+3. `Phase3/Day32/task2_full_v2_regeneration.md` 記錄了這個檔案當初是
+   怎麼生出來的,指令是:
+   ```
+   python generate_captions.py --split train --source gt --out captions_train_full_v2.jsonl
+   python generate_captions.py --split val --source gt --long-tail-ref-split train --out captions_val_full_v2.jsonl
+   ```
+   **兩條指令都沒有帶 `--filter-tiny`**——`generate_captions.py` 裡
+   `filter_tiny` 參數預設 `False`,沒開這個 flag,`GLOBAL_MIN_AREA_PCT`
+   這個常數(不管它當時是 0.05 還是 0.025)在這次生成過程裡**根本沒有
+   被讀到、沒有任何標註因為這個門檻被濾掉**。
+4. 時間序也對得上:`captions_train_full_v2.jsonl` 的 mtime 是
+   `2026-08-31 16:16:06`,晚於 `82023c6`(16:15:54)——就算它有套用
+   filter,用的也會是改完的 0.025%,不是 0.05%;但因為根本沒套用
+   filter,這個時間先後順序其實不影響結論。
+
+**對照組**:同一批 run 裡另外有一個 `best_model_filtered_v2.pt`
+(`Phase3/Day32/checkpoints/best_model_filtered_v2.pt`,mtime
+`2026-08-31 16:25:14`),`overrides.yaml` 顯示 `data=filtered_v2`,對應
+`captions_train_filtered_v2.jsonl`(mtime `16:14:47`,在 `82023c6`
+commit **之前**一分鐘生成,但 commit message 本身寫「regenerated
+captions_{train,val}_filtered_v2.jsonl」,代表這次生成用的就是改完
+0.025% 的程式碼、commit 只是晚一步把改動存進 git)。**這個 checkpoint
+才是真的用 0.025% 門檻篩過的訓練資料**,不是任務背景點名的
+`best_model_exp2_reweight2x.pt`。
+
+**結論(如實記錄,沒有修正任何門檻或程式碼)**:
+
+1. `GLOBAL_MIN_AREA_PCT` 確實從 0.05% 被刻意改成 0.025%,原因是
+   0.05% 會跟 `far_thresh` 打架、把所有遠距離物件連坐濾掉,commit
+   訊息跟程式碼註解對得上,不是口誤或沒改過。
+2. 因為找不到 `learning-plan.md` 本體,沒辦法直接證實它現在是不是還
+   停在 0.05% 沒更新——只能證明 in-repo 的紀錄(commit history + 程式碼
+   註解 + `day35_36_summary_for_decision.md`)彼此一致,呈現的是完整的
+   「先 0.05%、發現問題、改成 0.025%」故事。
+3. **背景點名的 `best_model_exp2_reweight2x.pt` 這個 checkpoint,訓練
+   資料生成時根本沒有套用 tiny-bbox 面積過濾**(用的是 `full_v2` 資料,
+   生成指令沒帶 `--filter-tiny`)。也就是說,對這個特定 checkpoint 而言,
+   「該用 0.05% 還是 0.025%」這個問題本身不成立——它兩個都沒用到。
+   真正用 0.025% 篩過的是另一個 checkpoint `best_model_filtered_v2.pt`。
+   如果任務描述裡把 `best_model_exp2_reweight2x.pt` 當成「GT-filtered
+   checkpoint」,這個認知本身可能需要更正——它是 full(未過濾)資料 +
+   reweight2x 實驗,不是 filtered 資料訓出來的。

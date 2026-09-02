@@ -223,3 +223,78 @@ quantize(
   被量化」的邏輯,精度分數沒動在預期之內。
 
 **mean < 0.9,依計畫進 exp7(手動排除 attention 裡實際的 MatMul 節點)。**
+
+## exp7 — 手動用 nodes_to_exclude 排除 attention 裡實際的 24 個 MatMul 節點
+
+先用 onnx 直接檢查 `clip_vision.onnx` 的計算圖(不是用 Netron 用猜的),
+確認每一層 attention 的 QK^T 和 AV 各是哪個 MatMul 節點:
+
+- 找每個 `Softmax` node 的輸入來源節點 → 12 層的 QK^T matmul:
+  `node_MatMul_61, node_MatMul_117, node_MatMul_172, node_MatMul_227,
+  node_MatMul_282, node_MatMul_337, node_MatMul_392, node_MatMul_447,
+  node_MatMul_502, node_MatMul_557, node_MatMul_612, node_MatMul_667`
+- attn_weights @ V 的 12 個 matmul,節點名稱剛好被 export 器命名成
+  `node_scaled_dot_product_attention`(未編號的第一個)到
+  `node_scaled_dot_product_attention_11`,op_type 確認就是 `MatMul`。
+
+因為這些節點的 `op_type` 跟其他 72 個非 attention 的 MatMul 一樣都是
+`MatMul`,`op_types_to_exclude` 會連專案投影層的 MatMul 一起排掉,所以改用
+`nodes_to_exclude`(用節點名稱排除)只針對這 24 個節點。
+
+tag: `day38-exp7-exclude-attn-matmul`
+
+```
+quantize(
+    onnx_path="clip_vision.onnx",
+    quantize_mode="int8",
+    calibration_data={"pixel_values": calib_array},
+    calibration_method="max",
+    nodes_to_exclude=[
+        "node_MatMul_61", "node_MatMul_117", "node_MatMul_172", "node_MatMul_227",
+        "node_MatMul_282", "node_MatMul_337", "node_MatMul_392", "node_MatMul_447",
+        "node_MatMul_502", "node_MatMul_557", "node_MatMul_612", "node_MatMul_667",
+        "node_scaled_dot_product_attention", "node_scaled_dot_product_attention_1",
+        "node_scaled_dot_product_attention_2", "node_scaled_dot_product_attention_3",
+        "node_scaled_dot_product_attention_4", "node_scaled_dot_product_attention_5",
+        "node_scaled_dot_product_attention_6", "node_scaled_dot_product_attention_7",
+        "node_scaled_dot_product_attention_8", "node_scaled_dot_product_attention_9",
+        "node_scaled_dot_product_attention_10", "node_scaled_dot_product_attention_11",
+    ],
+    output_path="clip_vision.int8.exp7_exclude_attn_matmul.onnx",
+)
+```
+
+結果 (`outputs_logs/exp7_eval.log`):
+
+- cosine sim mean = 0.555079
+- cosine sim min  = 0.487913
+- cosine sim std  = 0.024990
+
+**結論:沒解決。而且這組數字跟 exp5(disable_mha_qdq=True)到小數點後六位
+完全一樣**(mean 0.555079/min 0.487913,兩邊一模一樣)。代表手動排除的這
+24 個 MatMul,跟 `disable_mha_qdq=True` 實際上排除的節點集合是同一批——
+`disable_mha_qdq` 內部應該就是用類似方式(認節點命名/結構)在關閉這些
+matmul 的 QDQ,只是它自己 log 出來的 `Found 0 MHA (QK_AV) Patterns` 講的
+是另一個(沒作用的)pattern 偵測邏輯,兩者不是同一段程式碼路徑。
+
+量化 log(`outputs_logs/exp7_quantize.log`)跟 exp5 幾乎一致:一樣是
+`Found 0 MHA (QK_AV) Patterns`、一樣 147 個量化節點、一樣有
+`Converting float32 tensors to fp16`,這些都跟 exp5 對得上,不是新異常。
+
+**exp5/exp6/exp7 三個都做完,沒有一個把 cosine similarity 拉回 0.95+
+(甚至連 0.7 都沒到)。照計畫在這裡停下,不再猜 `block_size`、
+`autotune_*` 等其他參數。**
+
+### Day38 路線 A 總表
+
+| 實驗 | 改動 | mean | min | std |
+|---|---|---|---|---|
+| baseline (Day36) | calibration_method=max | 0.547456 | 0.479761 | 0.024778 |
+| exp1 | calibration_method=entropy | 0.523660 | 0.459029 | 0.026371 |
+| exp2 | entropy + exclude LayerNorm/Softmax | 0.524144 | 0.458979 | 0.026613 |
+| exp5 | max + disable_mha_qdq=True | 0.555079 | 0.487913 | 0.024990 |
+| exp6 | max + dq_only=True | 0.548602 | 0.482383 | 0.024888 |
+| exp7 | max + nodes_to_exclude(24 個 attention MatMul) | 0.555079 | 0.487913 | 0.024990 |
+
+五個實驗的 mean 全部卡在 0.52～0.56 之間,沒有一個接近 0.9,更不用說 0.95
+的目標。是否要換路線,由你判斷。

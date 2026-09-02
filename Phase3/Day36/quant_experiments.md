@@ -614,3 +614,87 @@ layer 0 單獨(0.842)跟 layer 6 單獨(0.846)幾乎一樣好,兩個都是目前
 
 **照計畫在這裡停下,不往 mixed precision 方案設計走,機制怎麼解讀、
 下一步怎麼走由你判斷。**
+
+---
+
+# Day38 續:FP16 轉換 + INT8 收尾嘗試 + decoder 對照組
+
+## exp17 — clip_vision.onnx 轉 FP16,驗證是否繞開 INT8 的精度崩潰
+
+**API 查證(查程式碼確認的事實,不是查文件猜的)**:本機環境裡
+`onnxruntime.transformers.float16.convert_float_to_float16` 跟
+`onnxconverter_common.float16.convert_float_to_float16` 兩個都裝了,用
+`inspect.signature()` 實際印出來確認參數:
+
+```
+onnxruntime.transformers.float16.convert_float_to_float16(
+    model, min_positive_val=5.96e-08, max_finite_val=65504.0,
+    keep_io_types=False, disable_shape_infer=False, op_block_list=None,
+    node_block_list=None, force_fp16_initializers=False,
+    force_fp16_inputs=None, use_bfloat16_as_blocked_nodes_dtype=False,
+)
+```
+
+用的是 `onnxruntime.transformers.float16` 這支(裝在本機 onnxruntime
+1.22.0 裡,不是額外裝的套件),`keep_io_types=True`(輸入輸出保持 float32,
+方便直接用 `eval_accuracy.py` 同一套前處理/後處理比對,不用改介面),其餘
+用預設值。輸出成新檔案 `clip_vision.fp16.onnx`(沒有覆蓋 FP32 原始檔)。
+
+```python
+model = onnx.load("clip_vision.onnx")
+model_fp16 = convert_float_to_float16(model, keep_io_types=True)
+onnx.save(model_fp16, "clip_vision.fp16.onnx", save_as_external_data=True,
+          location="clip_vision.fp16.onnx.data")
+```
+
+用跟 exp1-16 完全相同的 200 張 holdout(同一個 seed=1337、同一套
+`CLIPProcessor.from_pretrained(...)` 前處理,exp8 已經查過這是共用同一份
+呼叫路徑)。
+
+結果 (`outputs_logs/exp17_eval.log`):
+
+- cosine sim mean = 0.999999
+- cosine sim min  = 0.999997
+- cosine sim max  = 1.000000
+- cosine sim std  = 0.000000
+
+**結論:FP16 完全沒有 INT8 那種精度崩潰。** 幾乎是數值上的無損轉換,200
+張圖裡最差的一張也還有 0.999997,跟 INT8 系列實驗卡在 0.55～0.85 差了
+一個量級。這跟背景假設一致:FP16 是連續浮點縮短尾數,不像 INT8 需要
+per-tensor/per-channel 的 min-max calibration 跟離散化,不會遇到 INT8
+在這個模型上一直踩到的 scale/校準/attention pattern 辨識問題。
+
+### 延遲對照(CPU EP + CUDA EP,都有跑,環境裡本來就有 GPU)
+
+`nvidia-smi -L` 確認機器上有一張 RTX 4070;
+`onnxruntime.get_available_providers()` 回傳
+`['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']`。
+TensorRT EP 沿用先前 exp5-16 遇到的問題(缺 `libcudnn_adv*.so*`)沒有再
+另外排除,這裡只測**CUDA EP**(不是 TensorRT EP),用固定亂數輸入跑
+100 次(20 次 warmup),跟先前 profile_engine.py 的做法一致。
+
+結果 (`outputs_logs/exp17_eval.log` 下半部):
+
+| 版本 | CPU EP median (ms) | CUDA EP median (ms) |
+|---|---|---|
+| FP32 | 29.905 | 3.836 |
+| FP16 | 56.202 | 3.359 |
+| INT8(exp5 disable_mha_qdq) | 339.466 | 12.470 |
+
+**異常/發現(查數字確認的事實,不是推論)**:
+
+- FP16 在 **CPU EP 上比 FP32 慢約 1.9 倍**(56.2ms vs 29.9ms)。CPU 沒有
+  原生 FP16 SIMD 執行路徑,onnxruntime CPU EP 對 FP16 運算通常會內部轉回
+  FP32 算,所以比 FP32 慢是預期內的現象,跟 INT8 QDQ 在 CPU 上慢 11 倍
+  是類似性質的問題(格式不是為這個 EP 設計的),但慢的倍率小很多。
+- FP16 在 **CUDA EP 上比 FP32 快一點**(3.36ms vs 3.84ms,約 1.14 倍),
+  符合預期——GPU 有原生 FP16 tensor core 支援。
+- INT8(exp5 版)在 **CUDA EP 上還是比 FP32/FP16 慢**(12.47ms,比 FP32
+  的 3.84ms 慢約 3.25 倍)。這代表這份 QDQ 格式的 INT8 模型,就算換到
+  CUDA EP(不是 CPU EP)一樣沒有速度優勢——因為 QDQ 格式的 INT8 tensor
+  core 加速通常要靠 TensorRT EP 才有,純 CUDA EP 執行 QDQ 圖時一樣要做
+  逐節點 dequant/requant,開銷比原生 FP32/FP16 matmul 還大。跟先前
+  baseline 那則「INT8 在 CPU 上比 FP32 慢 11 倍」的觀察是同一個根本原因,
+  只是在 GPU CUDA EP 上倍率沒那麼誇張(3.25x vs 11x)。
+
+tag: `day38-exp17-fp16-conversion`

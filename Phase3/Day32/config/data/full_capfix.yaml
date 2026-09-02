@@ -1,0 +1,9 @@
+captions_train_path: captions_train_full_capfix.jsonl
+captions_val_path: captions_val_full_capfix.jsonl
+features_train_path: clip_features_train.pt
+features_val_path: clip_features_val.pt
+B: 8
+T: 1024
+total_batch_size: 524288
+base_vocab_size: 318
+special_token_size: 2

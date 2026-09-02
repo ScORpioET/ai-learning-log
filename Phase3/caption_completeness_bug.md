@@ -143,3 +143,187 @@ split 或某一個 domain 獨有的現象。抽樣人工檢查 8 筆案例(見�
 
 四個 domain/split 的比例(84.13% ~ 88.27%)全部遠遠超過 3% 門檻,**不是
 臨界模糊地帶**,判定為系統性問題,繼續執行 Phase 4。
+
+# Phase 4:修復 + 重新生成 + 重新訓練
+
+## 4a. 程式碼修復(只動 Phase 1 診斷出的那一個根因)
+
+`thermal_dataset/generate_captions.py` 的 `build_caption()`:
+
+```diff
+     ranked = aggregate_by_class(objects)
+-    if ranked[0][1]["count"] >= 5:
+-        ranked = ranked[:1]
+-    else:
+-        ranked = ranked[:2]
++    ranked = ranked[:2]
+```
+
+拿掉「最大類別 count>=5 時整個丟棄第二類」的特例,一律取 top-2(跟原本
+count<5 分支的行為一致)。SCRIPT_VERSION 同步標記為 v0.10。**沒有動**
+occlusion 過濾、long-tail 併入規則、position/distance 門檻、句型模板
+(模板 A/C 的選擇邏輯)、`--filter-tiny` 相關的面積過濾——只改了這一個
+判斷式。
+
+Repro case 驗證(frame-005300,跟 Phase 1 同一筆):
+
+- 修復前:`"Many pedestrians, one nearby on the right."`(car 完全沒提到)
+- 修復後:`"Many pedestrians, the nearest on the right; three cars, the
+  nearest ahead."`(car 正確出現)
+
+程式碼修復本身是 commit `41f4dc2`;`day38-caption-completeness-phase4`
+這個 tag 標在 Phase 4 全部完成(修復+重新生成+重新訓練+評估)之後的
+最後一筆 commit 上,涵蓋整個 Phase 4。
+
+## 4b. 重新生成 caption(對齊目前定案的訓練配方:全量版,不套面積過濾)
+
+用修好後的 v0.10 邏輯重跑:
+
+```
+python generate_captions.py --split train --source gt --out captions_train_full_capfix.jsonl
+python generate_captions.py --split val --source gt --long-tail-ref-split train --out captions_val_full_capfix.jsonl
+python generate_captions_rgb_full.py --split train --out captions_rgb_train_full_capfix.jsonl
+python generate_captions_rgb_full.py --split val --long-tail-ref-split train --out captions_rgb_val_full_capfix.jsonl
+```
+
+輸出筆數跟修復前完全一致(zero-object 跳過的圖片數量不受這個修復影響,
+只影響「有講到幾個類別」,不影響「有沒有動態物件」)：thermal train
+10,241 / val 1,097,RGB train 9,656 / val 1,004。
+
+CLIP 特徵沿用既有的(圖片本身沒變),RGB 一樣有 28/9,656(train)、
+2/1,004(val)筆因為當初過濾版特徵檔沒收進這些圖而被 `CaptionDataset`
+自動丟棄——跟 A9 記錄的比例完全相同。
+
+**查數字確認的副作用(修復後才看得到,不是猜的)**:雙子句(caption 裡
+有 `;`)樣本比例大幅上升——
+
+| | 修復前雙子句比例 | 修復後雙子句比例 |
+|---|---:|---:|
+| thermal train | 2,056/10,179(20.2%,filtered_v2 訓練當時)/ 全量版本身約同量級 | **8,429/10,241(82.3%)** |
+| RGB train | 1,916/9,628(19.9%,A9 full 訓練時) | **7,243/9,628(75.2%)** |
+
+這是修復的直接、預期的效果——過去 80% 以上多類別圖片被砍成單一類別
+描述(Phase 2 量到的 84-88%),現在絕大多數都能同時講出兩個類別。
+
+## 4c. 重新訓練(跟 exp2_reweight2x / rgb_full_reweight2x 完全一樣的配方)
+
+同一套雙子句判斷、x2 權重、`WeightedRandomSampler`、超參數(未調整任何
+數字),新的 data config 只是指到 capfix caption 檔案:
+
+```
+python train_vlm.py data=full_capfix train.ckpt_dir=checkpoints_full_capfix_reweight2x \
+    train.ckpt_path=checkpoints_full_capfix_reweight2x/best_model.pt \
+    train.log_dir=log_full_capfix_reweight2x \
+    +train.reweight_multi_position=true +train.multi_position_weight=2.0
+
+python train_vlm.py data=rgb_full_capfix train.ckpt_dir=checkpoints_rgb_full_capfix_reweight2x \
+    train.ckpt_path=checkpoints_rgb_full_capfix_reweight2x/best_model.pt \
+    train.log_dir=log_rgb_full_capfix_reweight2x \
+    +train.reweight_multi_position=true +train.multi_position_weight=2.0
+```
+
+| epoch | thermal capfix train loss | thermal capfix val loss | RGB capfix train loss | RGB capfix val loss |
+|---|---:|---:|---:|---:|
+| 0 | 0.5194 | 0.4550 | 0.5143 | 0.4542 |
+| 1 | 0.4017 | 0.4544 | 0.3833 | 0.4453 |
+| 2 | 0.3855 | 0.4491 | 0.3651 | 0.4417 |
+| 3 | 0.3718 | 0.4529 | 0.3536 | 0.4461 |
+| 4 | 0.3626 | 0.4535 | 0.3416 | 0.4248 |
+| 5 | 0.3488 | 0.4493 | 0.3327 | **0.4142** ← best |
+| 6 | 0.3352 | 0.4430 | 0.3162 | 0.4307 |
+| 7 | 0.3234 | **0.4412** ← best | 0.3055 | 0.4293 |
+| 8 | 0.3109 | 0.4519 | 0.2901 | 0.4300 |
+| 9 | 0.3035 | (最後一次量到 0.4519 之後沒有再降) | 0.2818 | 0.4300 |
+
+thermal:best epoch 8(表格 epoch 編號從 0 起算,對照 log 的 "epoch 7"
+那行是第 8 個訓練 epoch,val_loss=0.4412)。RGB:best epoch 6
+(log "epoch 5" 那行,val_loss=0.4142)。兩邊都沒有 nan/loss 爆炸,
+`norm_max` 全程在 3.5~15.8 之間,合理範圍。
+
+**查數字確認的事實(收斂節奏對照,跟修復前比較)**:兩個 capfix
+checkpoint 的 **val_loss 絕對值都比修復前的版本高**(thermal
+0.4412 vs 修復前 0.3872;RGB 0.4142 vs 修復前 0.3544)。這符合預期
+方向,不是訓練出問題——修復前的資料裡 80%+ 多類別圖片被砍成單一類別,
+任務本質上更簡單(要背的 token pattern 比較少);修復後幾乎所有多類別
+圖片都要學會同時講對兩個類別的位置/距離補述,任務資訊量變大,val_loss
+的絕對數字因此升高,兩者不是同一個難度基準,val_loss 不能直接跨版本比
+「哪個模型比較好」。
+
+checkpoint 複製到 `Phase3/Day32/checkpoints/best_model_full_capfix_reweight2x.pt`
+(thermal)、`Phase3/Day32/checkpoints/best_model_rgb_full_capfix_reweight2x.pt`
+(RGB)。
+
+## 4d. 評估對照(Day34 五項量化指標 + Position-Class Binding Accuracy)
+
+同一套 `evaluate_val.py`/`evaluate_val_rgb.py`(邏輯沒改動)、同一個
+`SEED=42`,跟修復前的既有基準(thermal `best_model_exp2_reweight2x.pt`、
+RGB `best_model_rgb_full_reweight2x.pt`,即 A9 的「修復前 full+reweight」
+版本)並排。
+
+### Day34 五項量化指標
+
+| 指標 | thermal 修復前(exp2) | thermal 修復後(capfix) | RGB 修復前(A9 full) | RGB 修復後(capfix) |
+|---|---:|---:|---:|---:|
+| checkpoint best epoch / val_loss | 7 / 0.3872 | 8 / 0.4412 | 2 / 0.3544 | 6 / 0.4142 |
+| val set n | 1,097 | 1,097 | 1,002 | 1,002 |
+| 合法前綴率 | 1.0000 | 0.9973 | 0.9920 | 0.9990 |
+| 前綴匹配率 | 0.8915 | 0.9043 | 0.9800 | 0.9830 |
+| Night P/R/F1(全部樣本) | 0.4486/0.4444/0.4465 | 0.5108/0.6574/0.5749 | 0.9515/0.9874/0.9691 | 0.9574/0.9906/0.9737 |
+| Night P/R/F1(hours 有標注,n=231/988) | 0.9600/0.4444/0.6076 | 0.9726/0.6574/0.7845 | 0.9721/0.9874/0.9797 | 0.9752/0.9906/0.9828 |
+| 句型模板合規率 | 0.9863 | 0.9717 | 0.9491 | 0.9840 |
+| 物件類別 precision(micro) | 0.6950 | 0.8087 | 0.7183 | 0.7647 |
+| 物件類別 recall(micro) | 0.7621 | 0.8426 | 0.7833 | 0.7974 |
+| **物件類別 f1(micro)** | **0.7270** | **0.8253** | **0.7494** | **0.7807** |
+| 生成長度 mean/median/p95 | 12.12/10.0/21.2 | 16.74/17.0/26.0 | 13.33/11.0/23.0 | 17.01/17.0/26.0 |
+| GT 長度 mean/median/p95 | 11.10/10.0/20.0 | 15.90/17.0/25.0 | 12.15/10.0/22.0 | 16.52/17.0/26.0 |
+| EOS 命中率 | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+
+**查數字確認的事實**:兩個 domain 修復後的物件類別 micro F1 都明顯上升
+(thermal +9.83pp:0.7270→0.8253;RGB +3.13pp:0.7494→0.7807),precision/
+recall 兩項都同步上升,不是單靠其中一項拉高。生成長度也同步跟著 GT 變長
+(GT 長度中位數從 10/10 變成 17/17,因為修復後 GT 本身多講了一個子句),
+生成句長度分布也跟著同步變長、不是模型自己亂加字。
+
+### Position-Class Binding Accuracy
+
+| 指標 | thermal 修復前 | thermal 修復後 | RGB 修復前 | RGB 修復後 |
+|---|---:|---:|---:|---:|
+| n | 1,097 | 1,097 | 1,002 | 1,002 |
+| GT clause parse 成功率 | 100.00% | 100.00% | 100.00% | 100.00% |
+| 生成句 clause parse 成功率 | 98.92% | 98.50% | 95.98% | 99.02% |
+| class-position 正確(correct) | 397 | **578** | 332 | **460** |
+| class-position 錯位(mismatch) | 168 | 415 | 126 | 380 |
+| position 缺失(missing) | 700 | 913 | 691 | 823 |
+| position 多餘(extra) | 810 | 976 | 760 | 883 |
+| 同位置有配對總數(matched=correct+mismatch) | 565 | 993 | 458 | 840 |
+| **Position-Class Binding Accuracy** | **70.27%** | **58.21%** | **72.49%** | **54.76%** |
+| **Class-Position 錯位率** | **29.73%** | **41.79%** | **27.51%** | **45.24%** |
+
+**查數字確認的事實,不是推論出「修復讓模型變差」**:Binding Accuracy
+這個「比例」指標修復後反而下降(thermal -12.06pp、RGB -17.73pp),但
+**答對的絕對數量(correct)其實是上升的**(thermal 397→578、RGB
+332→460)。原因是分母(matched = correct+mismatch)同步暴增更多
+(thermal 565→993、RGB 458→840)——這跟 4b 記錄的雙子句比例暴增
+(20%→82% / 20%→75%)是同一個現象的兩面:修復前大多數 caption 只有
+一個子句,可以配對的 position-class 組數少,答對的基數小、分母也小;
+修復後幾乎每張圖都要講兩個類別的位置,可配對的組數變多,模型要同時
+答對的位置數量也變多,每多一個子句就多一次可能答錯的機會,錯位率
+(分母裡答錯的比例)因此上升。**這是「任務本身變難」(要正確描述的
+資訊量變多)造成的比例下降,不是「修復讓模型能力變差」**——modelcorrect
+的絕對數量、物件類別 F1、Night 指標都同步上升,指向同一個方向:模型
+學到的東西變多了,只是 Binding Accuracy 這個「答對比例」指標在資訊量
+變大時本來就會被稀釋,兩個指標從不同角度量到不同的東西,不是互相矛盾。
+
+## 小結(不下「哪個版本該用」的結論)
+
+- **Caption 完整性**:Phase 2 量到的 84-88% 多類別圖片漏講類別問題,
+  修復後雙子句比例從 ~20% 回升到 75-82%,frame-005300 這個 repro case
+  也驗證修好了。
+- **Day34 五項指標**:修復後兩個 domain 的物件類別 F1 都明顯上升
+  (thermal +9.83pp、RGB +3.13pp),Night 指標同步持平或上升,模板合規率
+  thermal 略降(0.9863→0.9717)、RGB 上升(0.9491→0.9840)。
+- **Position-Class Binding Accuracy**:修復後兩個 domain 的「比例」都
+  下降(thermal -12.06pp、RGB -17.73pp),但答對的絕對數量是上升的——
+  這是任務資訊量變大的自然結果,不是模型能力退步的證據,但也不能因此
+  簡單說「修復後比較好」,兩種指標從不同角度衡量,数字都已經如實列在
+  上面,不自己下最終評價,判斷留給你。

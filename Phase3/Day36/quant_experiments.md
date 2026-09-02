@@ -186,3 +186,40 @@ quantize(
   記錄下來供之後比對。
 
 **mean < 0.9,依計畫進 exp6。**
+
+## exp6 — dq_only=True(其餘跟 baseline 一致:calibration_method="max",無 op exclude)
+
+tag: `day38-exp6-dq-only`
+
+```
+quantize(
+    onnx_path="clip_vision.onnx",
+    quantize_mode="int8",
+    calibration_data={"pixel_values": calib_array},
+    calibration_method="max",
+    dq_only=True,
+    output_path="clip_vision.int8.exp6_dq_only.onnx",
+)
+```
+
+結果 (`outputs_logs/exp6_eval.log`):
+
+- cosine sim mean = 0.548602
+- cosine sim min  = 0.482383
+- cosine sim std  = 0.024888
+
+**結論:沒解決。** mean 0.547456 → 0.548602,幾乎沒變,離 0.95 目標非常遠。
+
+量化 log 裡的異常(`outputs_logs/exp6_quantize.log`):
+
+- `Found 0 MHA (QK_AV) Patterns` 依然出現——這是三次(exp1/exp2/exp5/exp6)
+  唯一每次都一樣的訊息,再次確認 modelopt 從頭到尾沒認出這份 export 的
+  attention 結構。
+- `dq_only=True` 有確實生效:log 印出
+  `Converting model with QDQ nodes to DQ only model`、
+  `Removed 73 Q nodes and redundant cast nodes`,量化節點數變成 171
+  (跟 exp1 的 171 一樣)。這代表 dq_only 只是改變「QDQ 節點怎麼放」的
+  形式(拿掉多餘的 Quantize 節點,只留 Dequantize),不是改變「哪些節點
+  被量化」的邏輯,精度分數沒動在預期之內。
+
+**mean < 0.9,依計畫進 exp7(手動排除 attention 裡實際的 MatMul 節點)。**

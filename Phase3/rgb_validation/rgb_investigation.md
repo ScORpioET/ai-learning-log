@@ -456,3 +456,148 @@ captions_{train,val}_filtered_v2.jsonl」,代表這次生成用的就是改完
    如果任務描述裡把 `best_model_exp2_reweight2x.pt` 當成「GT-filtered
    checkpoint」,這個認知本身可能需要更正——它是 full(未過濾)資料 +
    reweight2x 實驗,不是 filtered 資料訓出來的。
+
+---
+
+# 任務 A6:`best_model_filtered_v2.pt` 血統查證(是不是真的吃到修好後的 pipeline)
+
+上一輪(A5)查到 `best_model_exp2_reweight2x.pt` 其實沒套用 tiny-bbox 過濾,
+真正用 0.025% 篩過的是 `best_model_filtered_v2.pt`。這裡反過來查證
+`best_model_filtered_v2.pt` 本身的血統夠不夠乾淨——它的訓練資料生成當下,
+是不是真的同時吃到「面積門檻已修正為 0.025%」跟「Day34 long-tail bug
+已修復」這兩個修正,而不是像原本 `best_model.pt` 那樣踩到舊 pipeline 的坑。
+
+## Checkpoint ↔ 訓練資料 ↔ 生成指令的對應關係(查 Hydra + 文件確認的事實)
+
+跟查 `exp2_reweight2x` 用同一種方法:先查 `best_model_filtered_v2.pt`
+對應哪個 Hydra run。
+
+- `Phase3/Day32/outputs/2026-08-31/16-18-16/.hydra/overrides.yaml`:
+  `data=filtered_v2`、`train.ckpt_dir=checkpoints_filtered_v2`、
+  `train.ckpt_path=checkpoints_filtered_v2/best_model.pt`——跟
+  `Phase3/Day32/checkpoints/best_model_filtered_v2.pt`(mtime
+  `2026-08-31 16:25:14`)對得上,是同一個 run 的產物。
+- `Phase3/Day32/config/data/filtered_v2.yaml` 的 `captions_train_path`
+  是 `captions_train_filtered_v2.jsonl`(在 `.hydra/config.yaml` 裡
+  確認過)。
+
+**沒有找到逐字的生成指令**:跟查 `exp2_reweight2x` 時不同,這次在
+`Phase3/Day32/*.md` 裡沒有找到一行寫著
+`python generate_captions.py ... --out captions_train_filtered_v2.jsonl`
+的逐字指令記錄(`threshold_sensitivity_v2.md` 只說「產出
+`captions_train_filtered_v2.jsonl`」,沒附指令);查了 `~/.bash_history`
+(1997 行)也搜不到任何一行含 `filtered_v2`/`filter-tiny`/`full_v2` 的
+紀錄——這些指令當時應該是在別的地方執行的(例如前一輪 Claude Code
+session 直接呼叫,沒有進到這個 shell 的 history 裡),沒辦法直接複製貼上
+逐字指令核對。因為文件跟 shell history 兩條路都查不到逐字指令,改用
+**直接對照實際資料**的方式驗證(見下面兩節)——這個方法比對照一行指令
+文字更直接,因為就算真的找到一行指令文字,還是要驗證那行指令有沒有真的
+被執行、有沒有被之後的操作覆蓋,不如直接驗算產出檔案本身。
+
+## (a) 生成當下面積門檻是不是 0.025%(不是 0.05%)——直接算給看,不是猜的
+
+方法:把 `generate_captions.py` 當模組載入,重用它**原本的**
+`DYNAMIC_CLASSES`/`STATIC_CONTEXT_CLASSES`/`OCCLUDED_DIFFICULT` 判斷邏輯
+跟 `compute_area_thresholds()`,對 `images_thermal_train/val` 的每張圖
+分別模擬「如果用 0.025% 門檻」跟「如果用 0.05% 門檻」會篩出幾個 dynamic
+object,拿去跟 `captions_train_filtered_v2.jsonl`/`captions_val_filtered_
+v2.jsonl` 裡實際記錄的 `num_objects` 欄位逐張圖對照。這是直接拿產出檔案
+反推當初用的門檻,不是看 commit 時間猜的。
+
+| split | n | 用 0.025% 模擬,跟實際 num_objects 完全吻合的圖片比例 | 用 0.05% 模擬,完全吻合比例 |
+|---|---:|---:|---:|
+| train | 10,179 | **100.0%**(mean diff = 0) | 40.6%(平均少算 1.62 個物件/圖) |
+| val | 1,096 | **100.0%**(mean diff = 0) | 45.3%(平均少算 1.43 個物件/圖) |
+
+**結論(查數字算出來的事實,不是推論)**:`captions_train_filtered_v2.
+jsonl` 跟 `captions_val_filtered_v2.jsonl` 裡,**每一張圖**的 `num_
+objects` 都跟「用 0.025% 門檻篩選」的模擬結果一模一樣(100% 吻合、mean
+diff=0)。如果當初其實是用 0.05% 生成的,吻合率只會有 40.6%/45.3%,而且
+會系統性地比實際少算 1.4~1.6 個物件——這個對照非常明確,**確認生成當下
+用的就是 0.025%,不是 0.05%**。
+
+## (b) 是不是用 Day34 long-tail bug 修復後的邏輯生成——用同一套驗證方法
+
+背景(A5 已查過的事實回顧):`--long-tail-ref-split` 這個 CLI 參數是
+Day34 加的(commit `80d3115`,2026-08-28 16:11),原本的 bug 是「val 自己
+的 split 樣本數太少,bike/motor/bus/truck/other vehicle 這些類別在 val
+自己算會落在 `LONG_TAIL_THRESHOLD=500` 門檻之下,被錯誤折成通用詞
+`"object"`,但同樣類別在 train 遠高於門檻,不會被折」——結果就是舊版
+`captions_val.jsonl` 裡「object」這個詞出現的次數(153 次)遠高於
+`captions_train.jsonl`(11 次),兩邊比例完全不成比例。
+
+同一天(08-31)15:44 有一個診斷 commit `46dd86a`
+("Task B: missing position 系統性根因 -- 查到 GT full 訓練檔仍帶
+pre-Day34-fix 的 long-tail bug"),確認**當時還在用的舊版
+`best_model.pt`/`best_model_filtered.pt`(注意:不是 `_v2`)訓練資料
+仍然帶著這個 bug**——即使 Day34 已經把修復的程式碼寫進 `generate_
+captions.py`,8/28~8/31 之間這幾天並沒有真的拿新程式碼重新生成過訓練
+檔案。這是後續 Task 1(面積門檻修正)、Task 2(long-tail 修正重生)
+兩輪工作的起因。
+
+**直接驗算 `captions_train_filtered_v2.jsonl`/`captions_val_filtered_
+v2.jsonl` 裡「object」這個 long-tail fallback 詞的出現比例**(用跟
+`Phase3/Day32/task2_full_v2_regeneration.md` 驗證 `full_v2` 時同樣的
+方法):
+
+| split | 總 caption 數 | 含「object/objects」的 caption 數 | 比例 |
+|---|---:|---:|---:|
+| train | 10,179 | 5 | 0.05% |
+| val | 1,096 | 1 | 0.09% |
+
+跟 bug 修復前的舊版(`captions_train.jsonl` 11 次 vs `captions_val.
+jsonl` 153 次,val 是 train 的 14 倍)完全不是同一種分布;反而跟已經
+確認修好的 `full_v2`(train 5/10241=0.05%、val 1/1097=0.09%,見 A5 引用
+的 `task2_full_v2_regeneration.md`)幾乎是一模一樣的數字(絕對次數都是
+train 5 次、val 1 次,比例也幾乎相同)。
+
+**結論(查數字確認的事實)**:`filtered_v2` 的 train/val 兩邊「object」
+折疊比例均衡、量級都在個位數,不是舊 bug 那種一邊 11 次一邊 153 次的
+懸殊分布——**確認生成時用的是 Day34 修復後的 long-tail 邏輯**,不是
+`best_model.pt` 當初踩到的那個舊邏輯。
+
+## 時間戳對照(commit + 檔案 mtime)
+
+| 事件 | 時間 |
+|---|---|
+| Day34 加入 `--long-tail-ref-split`(commit `80d3115`) | 2026-08-28 16:11:15 |
+| 診斷:舊 checkpoint 仍帶 pre-Day34-fix bug(commit `46dd86a`) | 2026-08-31 15:44:00 |
+| `captions_val_filtered_v2.jsonl` 檔案生成(mtime) | 2026-08-31 16:14:45 |
+| `captions_train_filtered_v2.jsonl` 檔案生成(mtime) | 2026-08-31 16:14:47 |
+| Task 1 commit:面積門檻 0.05→0.025,「regenerated captions_{train,val}_filtered_v2.jsonl」(`82023c6`) | 2026-08-31 16:15:54 |
+| `best_model_filtered_v2.pt` 訓練 run 開始(hydra outputs 目錄時間戳) | 2026-08-31 16:18:16 |
+| `best_model_filtered_v2.pt` 存檔(mtime) | 2026-08-31 16:25:14 |
+
+**兩個相關 commit 都在資料生成之前就已經存在對應的程式碼能力**——
+`--long-tail-ref-split` 從 8/28 就有了(生成 filtered_v2 時程式碼裡已經
+存在超過 3 天);面積門檻的修正雖然 commit(`82023c6`)在檔案 mtime 之後
+才進 git,但這只是「先改程式碼、生成資料、再一起 commit」的正常順序,
+不代表生成當下用的是舊值——(a) 節的直接對照已經證明生成當下確實是
+0.025%。
+
+**發現一個文件記錄上的小缺口(不是 pipeline 本身的問題)**:`82023c6`
+的 commit message 只提到「fix GLOBAL_MIN_AREA_PCT (0.05->0.025)...
+regenerated captions_{train,val}_filtered_v2.jsonl」,**沒有提到這次
+重生也套用了 `--long-tail-ref-split train`**——這個修正是 Task 2
+(`e689686`)的主題,但 Task 2 的 commit message 只提到 `full_v2`,完全
+沒提 `filtered_v2`。也就是說,`filtered_v2` 這次重生**同時**修了兩個
+bug,但兩份 commit message 各自只講了自己負責的那一個,沒有一份 commit
+message 完整記錄「filtered_v2 這次重生同時吃到兩個修正」這件事——這是
+純粹的**文件記錄缺口**,(a)(b) 兩節的直接數字驗算已經確認實際產出的
+資料檔案是乾淨的,不影響訓練資料本身的正確性。
+
+## 結論:`best_model_filtered_v2.pt` 血統乾淨,沒有踩到 bug
+
+如實回報,這次沒有發現藏著的 bug:
+
+1. **面積門檻**:確認是 0.025%,不是修正前的 0.05%(100% 逐圖比對吻合,
+   不是猜的)。
+2. **long-tail 邏輯**:確認用了 Day34 修復後的 `--long-tail-ref-split
+   train`,train/val 的「object」折疊比例均衡,沒有踩到舊 bug。
+3. 跟最早的 `best_model.pt`(踩兩個 bug)、`best_model_exp2_reweight2x.
+   pt`(完全沒套用面積過濾,見 A5)不同,`best_model_filtered_v2.pt`
+   的訓練資料是這幾個 GT-based checkpoint 裡,目前查證下來唯一確認
+   「兩個已知 bug 都修好之後才生成」的一份。
+4. 唯一的瑕疵是文件記錄面(commit message 沒有完整交代 filtered_v2
+   重生同時吃到兩個修正),不是資料或程式碼本身的問題,已經在上面如實
+   記錄,沒有為了報告好看而略過。

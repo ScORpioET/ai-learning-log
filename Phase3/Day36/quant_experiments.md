@@ -537,3 +537,80 @@ exp11(其中 layer 0-2,mean 0.679)、exp12(其中 layer 3-5,mean 0.813)
 **在這裡停下,不繼續切 layer 1 vs layer 2**,先回報這個現象,因為如果
 交互作用的推論是對的,繼續切下去很可能只會一直看到「合起來比分開差」
 的同一個模式,對定位問題沒有幫助,值得先跟你確認要不要換方法。
+
+## exp15/exp16 — 驗證「相鄰量化誤差複合」假設:layer 0+6(不相鄰)對照組
+
+判讀標準(你設定的):
+
+- exp15(layer 0+6)接近「layer 0 單獨」「layer 6 單獨」兩者較差的那個,
+  或明顯優於 exp14(layer 1-2 相鄰,0.808)→ 支持「相鄰誤差複合」
+- exp15 跟 exp14 差不多爛或更爛 → 跟相鄰與否無關,複合推論不成立
+
+### exp16 — 先補上 layer 6 單獨量化的數字(公平對照用)
+
+tag: `day38-exp16-layer6-alone`
+
+只量化 layer 6,其餘(0-5, 7-11)排除量化。`Total number of quantized
+nodes: 10`。
+
+結果 (`outputs_logs/exp16_eval.log`):
+
+- cosine sim mean = 0.846152
+- cosine sim min  = 0.732661
+- cosine sim std  = 0.037728
+
+### exp15 — 只量化 layer 0 跟 layer 6(不相鄰,中間 layer 1-5 維持 FP32)
+
+tag: `day38-exp15-layer0-6-nonadjacent`
+
+其餘(1,2,3,4,5,7,8,9,10,11)排除量化。`Total number of quantized
+nodes: 31`。
+
+```
+quantize(
+    onnx_path="clip_vision.onnx",
+    quantize_mode="int8",
+    calibration_data={"pixel_values": calib_array},
+    calibration_method="max",
+    nodes_to_exclude=<layer 1,2,3,4,5,7,8,9,10,11 全部節點>,
+    output_path="clip_vision.int8.exp15_quantize_layer0and6.onnx",
+)
+```
+
+結果 (`outputs_logs/exp15_eval.log`):
+
+- cosine sim mean = 0.641599
+- cosine sim min  = 0.544478
+- cosine sim std  = 0.037424
+
+### 對照表與判讀(從數字推論,不是查出來的事實)
+
+| 實驗 | 量化範圍 | 是否相鄰 | mean |
+|---|---|---|---|
+| exp13 | layer 0 單獨 | — | 0.841682 |
+| exp16 | layer 6 單獨 | — | 0.846152 |
+| exp14 | layer 1-2(2 層,相鄰) | 相鄰 | 0.808206 |
+| exp15 | layer 0+6(2 層,不相鄰) | 不相鄰 | 0.641599 |
+
+layer 0 單獨(0.842)跟 layer 6 單獨(0.846)幾乎一樣好,兩個都是目前測過
+「單層量化」裡數一數二好的。但把這兩個「各自都很無害」的層放在一起量化
+(exp15),結果反而是 0.642——**比相鄰的 layer 1-2 一起量化(exp14,
+0.808)還要差很多**,甚至比 layer 0-2 三層一起量化(exp11, 0.679)還差。
+
+依你設定的判讀標準:exp15 的數字不是「接近兩者較差的那個」(0.846 附近),
+也沒有「明顯優於 exp14」,而是比 exp14 明顯更爛——**落入「跟相鄰與否
+無關」這一類判讀**。而且結果比原本推論的方向更極端:不是「不相鄰所以
+複合效果消失、退化成接近較差單層」,而是不相鄰的組合反而比相鄰的組合
+更差。
+
+**結論(推論,非定論):「相鄰量化誤差沿殘差流複合」這個假設不成立**——
+如果成立,非相鄰的 layer 0+6 應該比相鄰的 layer 1-2 更不容易複合、分數
+應該更好或至少持平,但實測是不相鄰的反而更差。同時也不是單純「量化層數
+增加就等比例惡化」可以解釋(exp14 跟 exp15 都是量化 2 層,分數差了
+0.166,層數相同分數卻差很多)。看起來比較像是**特定層的組合有各自的
+交互作用**,不是可以用「相鄰/不相鄰」或「量化了幾層」這種簡單規則預測
+的——但這只是這四個數字目前能看出的方向,樣本數(4 組)還很小,不足以
+再往下細分機制。
+
+**照計畫在這裡停下,不往 mixed precision 方案設計走,機制怎麼解讀、
+下一步怎麼走由你判斷。**

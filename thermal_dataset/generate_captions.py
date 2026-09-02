@@ -36,7 +36,7 @@ v0.7 三層改動:
   Level 3 句型多樣化:模板 A(兩子句分號接)/ 模板 C(單類別時只有一子句)。
     模板 B(scene 後置)先跳過,避免弱化日夜前綴的訓練信號。
 """
-SCRIPT_VERSION = "v0.9 (2026-08-31, --filter-tiny global threshold, Day35 Task6)"
+SCRIPT_VERSION = "v0.10 (2026-09-02, fix build_caption() dropping 2nd class when top class count>=5, Day38 caption-completeness)"
 
 import json
 import argparse
@@ -368,23 +368,27 @@ def build_caption(objects, image_extra_info, image_id):
 
     v0.7 Level 2+3 重寫:類別總計(class_totals)為主軸決定要不要講、
     講幾隻,每個類別最近 instance 的位置只當補述,不再依位置/距離拆組。
-    句子最多取 2 個類別(按總數排序,同數依最近距離排);若最大類別
-    count>=5,單獨成句、不再擠第二類進來(v0.6「5 台車只講 2 台」的
-    問題,從根本改成「量大時寧可只完整講這一類,也不硬塞第二類」)。
+    句子最多取 2 個類別(按總數排序,同數依最近距離排)。
+
+    v0.10 Day38 caption-completeness bug 修正:v0.7 原本在最大類別
+    count>=5 時把 ranked 砍到只剩 1 類(理由是「量大時寧可只完整講這一類,
+    也不硬塞第二類」),但這個規則只看最大類別的數量,沒有排除「主類別
+    數量多 + 副類別同時存在」的情況——只要畫面裡有 5 台以上車,即使同時
+    有一台佔畫面 3% 的顯眼行人也會被整個丟掉,不是單純的 v0.6 top-2 截斷
+    問題。全體掃描(Phase3/caption_completeness_bug.md)量到 84-88% 的
+    多類別圖片至少漏講一個類別,絕大多數就是這個 count>=5 分支造成的。
+    改成一律取 top-2(拿掉 count>=5 的特例),不再無條件丟棄第二類。
 
     Level 3 模板:2 個子句時用分號接(模板 A);只剩 1 個子句時
-    (只有一個類別,或前面 count>=5 收斂成單一類別)自然變成模板 C,
-    不需要另外判斷。模板 B(scene 後置)先跳過,不動日夜前綴的訓練信號。
-    沒有任何動態物件的畫面直接跳過。
+    (畫面裡只有一個類別)自然變成模板 C,不需要另外判斷。模板 B
+    (scene 後置)先跳過,不動日夜前綴的訓練信號。沒有任何動態物件的
+    畫面直接跳過。
     """
     if not objects:
         return None
 
     ranked = aggregate_by_class(objects)
-    if ranked[0][1]["count"] >= 5:
-        ranked = ranked[:1]
-    else:
-        ranked = ranked[:2]
+    ranked = ranked[:2]
 
     rng = random.Random(image_id)
     clauses = [build_class_clause(en_name, info, rng) for en_name, info in ranked]

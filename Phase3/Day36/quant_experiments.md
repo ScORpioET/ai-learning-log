@@ -698,3 +698,49 @@ TensorRT EP 沿用先前 exp5-16 遇到的問題(缺 `libcudnn_adv*.so*`)沒有�
   只是在 GPU CUDA EP 上倍率沒那麼誇張(3.25x vs 11x)。
 
 tag: `day38-exp17-fp16-conversion`
+
+## exp18 — 查 modelopt 本機版本有沒有 activation smoothing/equalization(SmoothQuant/AWQ 類)選項
+
+**這節全部是查程式碼原始碼確認的事實,不是查網路文件、也不是猜的。**
+
+先找本機安裝的 modelopt 套件路徑,對 `modelopt/onnx/quantization/` 底下
+`grep -rli "smooth|equaliz|awq"`,結果命中:
+
+- `quantization/int4.py`:定義了 `AWQClipHelper`、`AWQLiteHelper`、
+  `_quantize_awq_clip`、`run_awq_scale_search_per_node` 等——AWQ(把量化
+  難度從 activation 轉移到 weight 的其中一種演算法)在這個版本裡**確實
+  存在**,不是完全沒實作。
+- `quantization/quantize.py`:往上一層的 `quantize()` 主函式裡看
+  `quantize_mode` 怎麼分派(第 681-758 行左右):
+
+  ```python
+  if quantize_mode in ["fp8", "int8"]:
+      quantize_func = quantize_int8 if quantize_mode == "int8" else quantize_fp8
+      onnx_model = quantize_func(
+          onnx_path=onnx_path,
+          calibration_method=calibration_method or "entropy",
+          ...  # 沒有任何 awq/smooth 相關參數傳進去
+      )
+  elif "int4" in quantize_mode:
+      onnx_model = quantize_int4(
+          onnx_path=onnx_path,
+          calibration_method=calibration_method or "awq_clip",
+          ...
+      )
+  ```
+
+  AWQ 相關的邏輯只掛在 `quantize_mode` 包含 `"int4"` 的分支(`quantize_int4`)
+  底下,`int8`/`fp8` 分支呼叫的是 `quantize_int8`/`quantize_fp8`,預設
+  `calibration_method` 是 `"entropy"`,不會走到任何 AWQ/smoothing 程式碼。
+- 再進一步查 `quantization/int8.py` 裡 `calibration_method` 實際怎麼用
+  (第 121、152、283 行),確認只有 `"entropy"` 這個分支邏輯跟隱含的
+  `"max"`,完全沒有 smoothing/equalization/awq 相關字串。
+
+**結論:查證後確認本機版本的 INT8 量化路徑不支援 activation
+smoothing/equalization(SmoothQuant/AWQ 類)這種選項。** AWQ 在這個版本
+的 modelopt 裡是存在的,但只綁定給 `int4`(weight-only 量化)用,`int8`
+路徑完全用不到它,不是「這個功能不存在」,是「這個功能存在但沒有接到
+int8 量化流程裡」——這條路不通,不用硬找替代方案。
+
+tag: `day38-exp18-smoothing-check`(這輪沒有新的量化產物,commit 只包含
+這份查證紀錄)

@@ -25,8 +25,17 @@ sys.modules["gc_orig"] = gc
 spec.loader.exec_module(gc)
 
 
+def _split_dir(domain, split):
+    # Day39:test split 資料夾命名跟 train/val 不同(video_{domain}_test,
+    # 不是 images_{domain}_test),跟 thermal_dataset/generate_captions.py
+    # 的同一個特例對齊。
+    if split == "test":
+        return f"video_{domain}_test"
+    return f"images_{domain}_{split}"
+
+
 def main(split, out_path, long_tail_ref_split=None):
-    root = Path.home() / "ai-transition-2026" / "thermal_dataset" / f"images_rgb_{split}"
+    root = Path.home() / "ai-transition-2026" / "thermal_dataset" / _split_dir("rgb", split)
     coco = json.load(open(root / "coco.json"))
 
     id2name = {c["id"]: c["name"] for c in coco["categories"]}
@@ -35,7 +44,7 @@ def main(split, out_path, long_tail_ref_split=None):
 
     ref_split = long_tail_ref_split or split
     if ref_split != split:
-        ref_root = Path.home() / "ai-transition-2026" / "thermal_dataset" / f"images_rgb_{ref_split}"
+        ref_root = Path.home() / "ai-transition-2026" / "thermal_dataset" / _split_dir("rgb", ref_split)
         ref_coco = json.load(open(ref_root / "coco.json"))
         ref_id2name = {c["id"]: c["name"] for c in ref_coco["categories"]}
         cat_counts_by_name = Counter(ref_id2name[a["category_id"]] for a in ref_coco["annotations"])
@@ -113,7 +122,7 @@ def main(split, out_path, long_tail_ref_split=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--split", required=True, choices=["train", "val"])
+    parser.add_argument("--split", required=True, choices=["train", "val", "test"])
     parser.add_argument("--out", required=True)
     parser.add_argument("--long-tail-ref-split", default=None, choices=["train", "val"])
     args = parser.parse_args()

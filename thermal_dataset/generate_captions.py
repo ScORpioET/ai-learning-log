@@ -424,7 +424,12 @@ def load_yolo_detections(detections_path):
 
 def main(split, out_path, sample_n=None, long_tail_ref_split=None,
          source="gt", detections_path=None, filter_tiny=False):
-    root = Path.home() / "ai-transition-2026" / "thermal_dataset" / f"images_thermal_{split}"
+    # Day39:test split 的資料夾命名跟 train/val 不同(video_thermal_test,
+    # 不是 images_thermal_test)——這個資料集是後來才拿到的獨立 held-out
+    # 集合,原本的 train/val 抽取流程沒有替它取一致的資料夾名稱。這裡只加
+    # 這一個特例,不改其他任何路徑邏輯。
+    split_dir = "video_thermal_test" if split == "test" else f"images_thermal_{split}"
+    root = Path.home() / "ai-transition-2026" / "thermal_dataset" / split_dir
     coco = json.load(open(root / "coco.json"))
 
     # Day35 --source yolo:偵測結果來自 YOLO,不是 coco.json 的 annotations,
@@ -593,7 +598,7 @@ def main(split, out_path, sample_n=None, long_tail_ref_split=None,
 if __name__ == "__main__":
     print(f"[script version] {SCRIPT_VERSION}")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--split", default="train", choices=["train", "val"])
+    parser.add_argument("--split", default="train", choices=["train", "val", "test"])
     parser.add_argument("--out", default=None,
                          help="不指定時依 --split/--source 自動命名:"
                               "captions_{split}.jsonl(gt)或 captions_{split}_yolo.jsonl(yolo)")

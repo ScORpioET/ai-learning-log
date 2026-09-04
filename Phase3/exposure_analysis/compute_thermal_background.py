@@ -35,6 +35,15 @@ DYNAMIC_CLASSES = {"person", "bike", "motor", "car", "bus", "truck",
 EXPANSIONS = [0.25, 0.50, 0.75]
 
 
+def thermal_gray_array(img_source):
+    """thermal jpg -> float32 灰階 array,跟 main() 裡讀圖的方式完全一致
+    (單通道 "L",不是 RGB luminance 換算)。img_source 可以是路徑,也可以是
+    已經開檔的 file-like 物件(PIL.Image.open 兩種都吃)——Day41 校準工具
+    用 Streamlit file_uploader 拿到的是 file-like 物件,一樣重用這個函式,
+    確保 thermal 側讀圖邏輯只有一個來源。"""
+    return np.asarray(Image.open(img_source).convert("L"), dtype=np.float32)
+
+
 def expand_bbox(x, y, w, h, pct, img_w, img_h):
     cx, cy = x + w / 2, y + h / 2
     new_w, new_h = w * (1 + 2 * pct), h * (1 + 2 * pct)
@@ -65,7 +74,7 @@ def main():
         im_info = img_meta[img_id]
         img_path = TH_DIR / im_info["file_name"]
         try:
-            arr = np.asarray(Image.open(img_path).convert("L"), dtype=np.float32)
+            arr = thermal_gray_array(img_path)
         except Exception as e:
             print(f"[warn] 讀圖失敗 {img_path}: {e}")
             continue

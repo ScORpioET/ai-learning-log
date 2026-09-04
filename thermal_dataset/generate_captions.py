@@ -368,7 +368,6 @@ def build_caption(objects, image_extra_info, image_id):
 
     v0.7 Level 2+3 重寫:類別總計(class_totals)為主軸決定要不要講、
     講幾隻,每個類別最近 instance 的位置只當補述,不再依位置/距離拆組。
-    句子最多取 2 個類別(按總數排序,同數依最近距離排)。
 
     v0.10 Day38 caption-completeness bug 修正:v0.7 原本在最大類別
     count>=5 時把 ranked 砍到只剩 1 類(理由是「量大時寧可只完整講這一類,
@@ -379,6 +378,15 @@ def build_caption(objects, image_extra_info, image_id):
     多類別圖片至少漏講一個類別,絕大多數就是這個 count>=5 分支造成的。
     改成一律取 top-2(拿掉 count>=5 的特例),不再無條件丟棄第二類。
 
+    v0.11(2026-09-04 Jack 指定,caption_fusion 專用路徑):句子改成不設
+    類別數上限,合併後有幾個 class 就講幾個——拿掉下面原本的
+    `ranked = ranked[:2]`。這是套用在 build_caption() 這個共用函式上的
+    改動,train/val/test 的 GT caption 產出、RGB 版本都共用同一份程式碼,
+    但這次只重跑了 caption_fusion 的 10 筆樣本,沒有重新產生整個
+    dataset 的 captions_{split}.jsonl,所以既有的訓練資料/checkpoint
+    不受影響;如果之後要真的拿掉上限重新產生全量 GT,需要另外評估對
+    已訓練模型的影響。
+
     Level 3 模板:2 個子句時用分號接(模板 A);只剩 1 個子句時
     (畫面裡只有一個類別)自然變成模板 C,不需要另外判斷。模板 B
     (scene 後置)先跳過,不動日夜前綴的訓練信號。沒有任何動態物件的
@@ -388,7 +396,6 @@ def build_caption(objects, image_extra_info, image_id):
         return None
 
     ranked = aggregate_by_class(objects)
-    ranked = ranked[:2]
 
     rng = random.Random(image_id)
     clauses = [build_class_clause(en_name, info, rng) for en_name, info in ranked]

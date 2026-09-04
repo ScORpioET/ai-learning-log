@@ -123,8 +123,9 @@ h1 {{ font-size:1.5rem; margin:0 0 4px; }}
 <div class="subtitle">
 Test split,seed=42 抽樣 10 組 RGB/thermal frame_id 對應樣本。每組都列出兩邊 GT(對 GT 標註直接跑
 generate_captions.py,不是模型生成)、兩邊模型生成 caption、融合後的 RGB 優先版與 thermal 優先版
-(兩版永遠都輸出,不由系統自動二選一)。徽章是根據 Day40 在 train set 上訂出的曝光/背景品質門檻
-(RGB bright_diff / median_luminance,thermal object-surround diff)算出的「系統建議」,只是附加提示,
+(兩版永遠都輸出,不由系統自動二選一;build_caption() 的 top-2 class 上限已拿掉,合併後有幾個
+class 就講幾個)。徽章依 2026-09-04 定案的固定門檻計算:RGB 側任一 bbox 的 dark_diff&gt;200 或
+median_luminance&lt;50 → 建議 thermal 優先,否則預設 RGB 優先;thermal 側不參與判斷。只是附加提示,
 不代表唯一正確答案。
 </div>
 <div class="grid">

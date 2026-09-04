@@ -1,27 +1,19 @@
 """
-Day39 收尾:對 caption_fusion/test_pairs.json 的 10 組 test frame pair,套用
-Day40 已經在 train set 上訂出的曝光/背景品質門檻,算出「系統建議」——
-RGB 優先還是 thermal 優先,附理由。
+Day39 收尾(2026-09-04 改版):對 caption_fusion/test_pairs.json 的 10 組
+test frame pair,套用 Jack 明確指定的固定門檻,算出 RGB/thermal 優先權
+建議。
 
-方法(沿用 Day40 的邏輯與門檻,不重新發明):
-- bbox 外擴公式、luminance 公式、bright_diff/median_luminance(RGB)、
-  object/surround diff(thermal)全部照抄 compute_rgb_exposure.py /
-  compute_thermal_background.py,不改任何算法。
-- 門檻直接沿用 summary_results.json 裡 pct_50 這一層算出來的門檻(這 10 筆
-  抽樣样本量太小,自己重新算百分位數沒有意義,所以借用 train set 全量算出的
-  門檻——這是方法論選擇:假設 train/test 的曝光/背景分布相近):
-    RGB:   bright_thresh = 123.2   (bright_diff > 這個值 -> 疑似局部強光/過曝)
-           median_thresh = 94.862  (median_luminance <= 這個值 -> 疑似整體太暗)
-    thermal: thresh = 3.0          (diff <= 這個值 -> 疑似物體融入背景)
-- 一張圖(一個 sample 的 RGB 或 thermal 那一側)裡可能有多個 dynamic-class
-  bbox,只要「任一個」bbox 踩到門檻,就判定這一側有問題(取最壞情況,
-  不是平均掉)。
-- 建議規則(這次任務要求「只加標籤+理由,不強制選版本」,所以下面的規則
-  只產生一個「系統建議」字串,兩個 fused 版本仍然都輸出):
-    RGB 有問題、thermal 沒有 -> 建議 thermal 優先
-    thermal 有問題、RGB 沒有 -> 建議 RGB 優先
-    兩邊都沒問題 / 兩邊都有問題 -> 沒有明確訊號,理由裡把兩邊的狀態都列出來,
-      不硬選一邊(這是誠實揭露,不是漏規則)
+規則(2026-09-04 定案,寫死的固定數字,不是這批資料的百分位數):
+    dark_diff > 200 OR median_luminance < 50  ->  判定 RGB 被燈光影響,
+    改用 thermal 優先;否則預設用 RGB 優先。
+不使用 bright_diff 當判斷依據。thermal 側不另外設門檻、不做獨立失效
+檢查——一律看 RGB 側的判斷結果決定優先權(這點跟舊版的差異最大:舊版
+thermal diff<=p10 也會單獨觸發「建議 RGB 優先」,這版拿掉了)。
+
+方法:bbox 外擴公式、luminance 公式全部照抄 compute_rgb_exposure.py,
+不改算法,只新增 dark_diff(= median - p1)這個原本只在 compute_rgb_exposure.py
+裡算過、但這支腳本先前沒有算的欄位。一張圖裡可能有多個 dynamic-class
+bbox,只要「任一個」bbox 踩到門檻,就判定 RGB 這一側有問題(取最壞情況)。
 
 輸出:sample_quality.json
 """
@@ -40,10 +32,9 @@ FUSION_DIR = Path(__file__).parent.parent / "caption_fusion"
 sys.path.insert(0, str(Path(__file__).parent))
 from compute_rgb_exposure import DYNAMIC_CLASSES, expand_bbox  # noqa: E402
 
-RGB_BRIGHT_THRESH = 123.2
-RGB_MEDIAN_THRESH = 94.862
-THERMAL_DIFF_THRESH = 3.0
-EXPAND_PCT = 0.50  # 沿用 summary_results.json 門檻對應的那一層
+DARK_DIFF_THRESH = 200
+MEDIAN_THRESH = 50
+EXPAND_PCT = 0.50  # 跟 compute_rgb_exposure.py 的外擴定義一致,固定門檻本身跟外擴比例無關
 
 
 def load_coco_anns(coco_path, dynamic_classes):
@@ -76,23 +67,19 @@ def rgb_quality(file_name, im_info, anns, id2name):
             continue
         region = lum[y0:y1, x0:x1]
         med = float(np.median(region))
-        p99 = float(np.percentile(region, 99))
-        bright_diff = round(p99 - med, 2)
+        p1 = float(np.percentile(region, 1))
+        dark_diff = round(med - p1, 2)
         per_bbox.append({
             "category": id2name[ann["category_id"]],
             "bbox": [x, y, w, h],
             "median_luminance": round(med, 2),
-            "bright_diff": bright_diff,
-            "overexposed": bright_diff > RGB_BRIGHT_THRESH,
-            "underexposed": med <= RGB_MEDIAN_THRESH,
+            "dark_diff": dark_diff,
+            "lighting_affected": dark_diff > DARK_DIFF_THRESH or med < MEDIAN_THRESH,
         })
-    has_over = any(b["overexposed"] for b in per_bbox)
-    has_under = any(b["underexposed"] for b in per_bbox)
+    has_issue = any(b["lighting_affected"] for b in per_bbox)
     return {
         "per_bbox": per_bbox,
-        "has_issue": has_over or has_under,
-        "overexposed": has_over,
-        "underexposed": has_under,
+        "has_issue": has_issue,
     }
 
 
@@ -130,32 +117,26 @@ def thermal_quality(file_name, im_info, anns, id2name):
             "object_median": round(object_median, 2),
             "surround_median": round(surround_median, 2),
             "diff": diff,
-            "blends_in": diff <= THERMAL_DIFF_THRESH,
         })
-    has_issue = any(b["blends_in"] for b in per_bbox)
-    return {"per_bbox": per_bbox, "has_issue": has_issue}
+    # thermal 側不設獨立門檻(2026-09-04 定案),這裡只保留 diff 數字供參考,
+    # 不產生 has_issue,優先權判斷完全不看這個結果。
+    return {"per_bbox": per_bbox}
 
 
-def suggest(rgb_q, th_q):
-    rgb_bad, th_bad = rgb_q["has_issue"], th_q["has_issue"]
-    if rgb_bad and not th_bad:
-        reasons = []
-        if rgb_q["overexposed"]:
-            reasons.append("RGB 該區域偵測到局部過曝(bright_diff 超過 train set 門檻 123.2)")
-        if rgb_q["underexposed"]:
-            reasons.append("RGB 整體亮度過低(median_luminance 低於 train set 門檻 94.862)")
-        return {"label": "建議 thermal 優先", "reason": "、".join(reasons) + "，thermal 該側未偵測到融入背景問題。"}
-    if th_bad and not rgb_bad:
-        return {"label": "建議 RGB 優先", "reason": "thermal 偵測到物體與周圍環境像素值接近(diff 低於 train set 門檻 3.0)，疑似融入背景，RGB 該側未偵測到曝光問題。"}
-    if rgb_bad and th_bad:
-        reasons = []
-        if rgb_q["overexposed"]:
-            reasons.append("RGB 局部過曝")
-        if rgb_q["underexposed"]:
-            reasons.append("RGB 整體過暗")
-        reasons.append("thermal 疑似融入背景")
-        return {"label": "無明確建議(兩側皆有訊號)", "reason": "、".join(reasons) + "——兩側都有品質疑慮，不強制替使用者選邊，兩個版本並列供參考。"}
-    return {"label": "無明確建議(兩側皆正常)", "reason": "RGB 與 thermal 這一側都沒有踩到 train set 訂出的曝光/背景門檻，兩個版本並列供參考。"}
+def suggest(rgb_q):
+    """2026-09-04 定案:dark_diff>200 OR median_luminance<50 -> thermal 優先,
+    否則預設 RGB 優先。thermal 側不參與判斷。"""
+    if rgb_q["has_issue"]:
+        reasons = [f"{b['category']}: dark_diff={b['dark_diff']}, median_luminance={b['median_luminance']}"
+                   for b in rgb_q["per_bbox"] if b["lighting_affected"]]
+        return {
+            "label": "建議 thermal 優先",
+            "reason": f"RGB 側偵測到 dark_diff>200 或 median_luminance<50(命中的 bbox: {'; '.join(reasons)})，判定 RGB 被燈光影響。",
+        }
+    return {
+        "label": "建議 RGB 優先",
+        "reason": "RGB 側所有 bbox 的 dark_diff 都 <=200 且 median_luminance 都 >=50，未偵測到燈光問題，預設用 RGB。",
+    }
 
 
 def main():
@@ -170,10 +151,10 @@ def main():
         rgb_im, rgb_anns = rgb_by_file.get(rf, (None, []))
         th_im, th_anns = th_by_file.get(tf, (None, []))
 
-        rgb_q = rgb_quality(rf, rgb_im, rgb_anns, rgb_id2name) if rgb_anns else {"per_bbox": [], "has_issue": False, "overexposed": False, "underexposed": False}
-        th_q = thermal_quality(tf, th_im, th_anns, th_id2name) if th_anns else {"per_bbox": [], "has_issue": False}
+        rgb_q = rgb_quality(rf, rgb_im, rgb_anns, rgb_id2name) if rgb_anns else {"per_bbox": [], "has_issue": False}
+        th_q = thermal_quality(tf, th_im, th_anns, th_id2name) if th_anns else {"per_bbox": []}
 
-        sug = suggest(rgb_q, th_q)
+        sug = suggest(rgb_q)
         print(f"{tf} <-> {rf}: {sug['label']}  ({sug['reason']})")
         out.append({
             "thermal_file": tf, "rgb_file": rf,

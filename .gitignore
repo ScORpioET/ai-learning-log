@@ -105,3 +105,7 @@ Phase1-nanoGPT/Day18/t_sweep_dense.py
 Phase1-nanoGPT/Day18/validate_prefill.py
 constant_folding_repro.py
 *.npy
+
+# large generated artifacts, not tracked in git (see Day41 commit)
+Phase3/flare_removal/Flare7K/
+Phase3/video_reconstruction/*/*.mp4

@@ -1,29 +1,15 @@
 """
 Day40:彙整 compute_rgb_exposure.py / compute_thermal_background.py 的原始
-數字,畫直方圖(標 10/25/50/75/90 百分位數),並且用「觀察到的百分位數
-本身」當門檻決定「有問題」的比例——不是憑感覺挑一個絕對數字。
+數字,畫直方圖(標 10/25/50/75/90 百分位數)。
 
-門檻定義(方法論選擇,不是查出來的事實,理由寫在這裡):
-- RGB 過曝:bright_diff 是「這個 bbox 外擴區域裡,最亮的 1% 像素比
-  中位數基準偏離多少」。偏離越大代表局部強光訊號越強。用這批 bbox
-  自己的 p90 當門檻——超過 p90(全體最極端的前 10%)才算「有強光問題」。
-- RGB 欠曝(2026-09-03 換掉 dark_diff,改用 median_luminance):原本
-  用 dark_diff(中位數 - 最暗 1% 像素)判斷欠曝,實測發現排出來的
-  top 案例反而大多是「場景本身已經過曝(中位亮度 185-250),裡面剛好
-  有一小塊暗色元素」——dark_diff 抓到的其實還是過曝訊號,不是欠曝
-  (詳見 bright20/extreme_exposure 兩份 artifact 的人工核對)。改成
-  直接看這個 bbox 外擴區域「自己的中位亮度」夠不夠暗:用這批 bbox 自己
-  的 p10 當門檻,median_luminance 低於 p10(全體最暗的後 10%)才算
-  「欠曝」。這個指標量的是「這個區域整體有多暗」,不是「跟自己比有沒有
-  局部反差」,兩者不是同一件事,md 亮度低才是真的欠曝。
-  過曝(bright_diff)跟欠曝(median_luminance)分開判斷,任一個超標就
-  算這個 bbox 有問題(因為題目說兩者可能同時發生,不互斥)。
-- thermal:diff 是「物體中位數 vs 外擴環中位數」的差,diff 越小代表物體
-  跟背景越像、越難分辨。用這批 bbox 自己的 p10 當門檻——低於 p10(全體
-  最不明顯的後 10%)算「跟背景太像」。
-用同一批資料自己的百分位數當門檻,好處是不管兩個 domain 的絕對亮度/
-溫度尺度差多少,「前 10% 最極端」這個定義都可以套用,不用另外猜一個
-跨 domain 都適用的絕對數字。
+RGB 優先權判斷門檻(2026-09-04 Jack 明確指定,寫死的固定數字,不是從這批
+資料的百分位數算出來的——這裡只是照給定規則套用,不重新推導理由):
+    dark_diff > 200 OR median_luminance < 50  ->  判定 RGB 被燈光影響,
+    這個 bbox 算「有問題」,否則預設沒問題。
+不使用 bright_diff 當判斷依據(bright_diff 直方圖/百分位數還是照算照畫,
+留著當診斷資訊,但不進入 flagged 的判斷式)。thermal 側不另外設門檻做
+獨立的優先權判斷(見 compute_sample_quality.py),這裡的 thermal diff
+分析純粹是背景相近程度的描述統計,不是優先權規則的一部分。
 """
 import json
 import statistics
@@ -67,40 +53,46 @@ def analyze_rgb(records):
     print("\n" + "=" * 70)
     print("RGB 曝光分析")
     print("=" * 70)
+    DARK_DIFF_THRESH = 200
+    MEDIAN_THRESH = 50
+
     summary = {}
     for pct in PCTS:
         key = f"pct_{pct}"
         bright = [r[key]["bright_diff"] for r in records if r.get(key)]
+        dark = [r[key]["dark_diff"] for r in records if r.get(key)]
         median_lum = [r[key]["median_luminance"] for r in records if r.get(key)]
 
         bright_pctile = percentile_table(bright)
+        dark_pctile = percentile_table(dark)
         median_pctile = percentile_table(median_lum)
-        bright_thresh = bright_pctile[90]
-        median_thresh = median_pctile[10]
 
         flagged = 0
         for r in records:
             rec = r.get(key)
             if not rec:
                 continue
-            if rec["bright_diff"] >= bright_thresh or rec["median_luminance"] <= median_thresh:
+            if rec["dark_diff"] > DARK_DIFF_THRESH or rec["median_luminance"] < MEDIAN_THRESH:
                 flagged += 1
         n = sum(1 for r in records if r.get(key))
         pct_flagged = flagged / n * 100
 
         print(f"[外擴 {pct}%] n={n}  bright_diff p10/25/50/75/90={bright_pctile}  "
-              f"median_luminance p10/25/50/75/90={median_pctile}")
-        print(f"           門檻: bright_diff>={bright_thresh:.1f}(p90) or median_luminance<={median_thresh:.1f}(p10)"
+              f"dark_diff p10/25/50/75/90={dark_pctile}  median_luminance p10/25/50/75/90={median_pctile}")
+        print(f"           門檻(固定值): dark_diff>{DARK_DIFF_THRESH} or median_luminance<{MEDIAN_THRESH}"
               f"  -> 有問題比例 = {pct_flagged:.2f}% ({flagged}/{n})")
 
-        plot_hist(bright, bright_pctile, f"RGB bright_diff (expand {pct}%)",
+        plot_hist(bright, bright_pctile, f"RGB bright_diff (expand {pct}%) - diagnostic only, not used for flagging",
                   "p99 - median luminance", HERE / f"hist_rgb_bright_diff_{pct}.png", "#c2703a")
+        plot_hist(dark, dark_pctile, f"RGB dark_diff (expand {pct}%)",
+                  "median - p1 luminance", HERE / f"hist_rgb_dark_diff_{pct}.png", "#a13d3d")
         plot_hist(median_lum, median_pctile, f"RGB median_luminance (expand {pct}%)",
                   "median luminance of region", HERE / f"hist_rgb_median_lum_{pct}.png", "#0d7d8c")
 
         summary[pct] = {
-            "n": n, "bright_diff_percentiles": bright_pctile, "median_luminance_percentiles": median_pctile,
-            "bright_thresh": bright_thresh, "median_thresh": median_thresh,
+            "n": n, "bright_diff_percentiles": bright_pctile, "dark_diff_percentiles": dark_pctile,
+            "median_luminance_percentiles": median_pctile,
+            "dark_diff_thresh": DARK_DIFF_THRESH, "median_thresh": MEDIAN_THRESH,
             "flagged": flagged, "pct_flagged": round(pct_flagged, 3),
         }
     return summary

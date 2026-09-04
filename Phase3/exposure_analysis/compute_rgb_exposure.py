@@ -52,6 +52,36 @@ EXPANSIONS = [0.25, 0.50, 0.75]
 SAT_THRESH = 250
 DARK_THRESH = 5
 
+# Day41:Jack 手動校準門檻用的新指標(跟上面 SAT_THRESH/DARK_THRESH 是不同
+# 用途——那組是 main() 這支全量掃描腳本既有的 8-bit clipping 門檻,這組是
+# calibrate_exposure_ui.py 手動校準時要看的門檻,數字不同,不要混用)。
+HIGH_FRAC_THRESH = 240
+LOW_FRAC_THRESH = 15
+
+
+def high_low_frac(lum, high_thresh=HIGH_FRAC_THRESH, low_thresh=LOW_FRAC_THRESH):
+    """回傳 (high_frac, low_frac)。算法跟 SAT_THRESH/DARK_THRESH 那組
+    saturated_frac/dark_frac 完全一樣的寫法(pixel 落在門檻內的比例),
+    只是門檻數字不同,是新指標不是重算舊的。"""
+    high_frac = float(np.mean(lum >= high_thresh))
+    low_frac = float(np.mean(lum <= low_thresh))
+    return high_frac, low_frac
+
+
+def rgb_luminance(arr):
+    """arr: HxWx3 float array(RGB)。標準攝影亮度換算公式,單一定義來源——
+    這個檔案(main() 的逐 bbox 迴圈)跟 Day41 校準工具(calibrate_exposure_ui.py)
+    都呼叫這個函式,不要各自重寫一份,避免兩邊算出來的數字對不上。"""
+    return 0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2]
+
+
+def median_dark_diff(lum):
+    """回傳 (median, dark_diff)。dark_diff = median - p1,定義跟
+    compute_sample_quality.py 的 rgb_quality() 完全一致。"""
+    med = float(np.median(lum))
+    p1 = float(np.percentile(lum, 1))
+    return med, med - p1
+
 
 def expand_bbox(x, y, w, h, pct, img_w, img_h):
     cx, cy = x + w / 2, y + h / 2
@@ -87,7 +117,7 @@ def main():
         except Exception as e:
             print(f"[warn] 讀圖失敗 {img_path}: {e}")
             continue
-        lum = 0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2]
+        lum = rgb_luminance(arr)
         img_h, img_w = lum.shape
 
         for ann in anns:

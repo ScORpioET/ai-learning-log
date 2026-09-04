@@ -18,9 +18,9 @@ Day39:parser + 融合邏輯。
       class 的資訊會憑空消失。
    c. 融合後的 class 清單轉成 generate_captions.py 的 build_caption() 能
       吃的 objects 格式,直接呼叫 build_caption()(逐行沿用,不重寫任何
-      模板/排序邏輯)生成最終自然語言。build_caption() 內部本來就會用
-      count 排序、只取 top-2 class,如果融合後超過 2 個 class,由它原本
-      的邏輯決定留哪兩個,這裡不額外加規則。
+      模板/排序邏輯)生成最終自然語言。2026-09-04 起 build_caption() 內部
+      的 `ranked = ranked[:2]` 已經拿掉(Jack 指定),融合後有幾個 class
+      就全部講完,不再只取 count 排序後的前兩個。
 
 COUNT 桶(count_to_subject() 的分界,查程式碼確認的事實):
   1 -> "a X" / 2 -> "two Xs" / 3 -> "three Xs" / 4-6 -> "several Xs" / 7+ -> "many Xs"

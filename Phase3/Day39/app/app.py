@@ -145,8 +145,8 @@ def generate_caption(image: Image.Image, domain: str, device: str):
     return caption, f"{elapsed_ms:.1f} ms  ({used_device})", annotated
 
 
-with gr.Blocks(title="Thermal Caption Demo (v1.1)") as demo:
-    gr.Markdown("# Thermal Caption Demo (v1.1)")
+with gr.Blocks(title="Thermal Caption Demo (v1.0)") as demo:
+    gr.Markdown("# Thermal Caption Demo (v1.0)")
     with gr.Row():
         domain_in = gr.Radio(list(DOMAINS.keys()), value="thermal", label="Domain")
         if GPU_AVAILABLE:

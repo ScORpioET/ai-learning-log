@@ -37,3 +37,20 @@ def detect_and_draw(image: Image.Image) -> Image.Image:
     results = _yolo_model.predict(source=image, conf=CONF_THRESH, classes=list(KEEP_CLASSES.keys()), verbose=False)
     annotated_bgr = results[0].plot()  # numpy array, BGR
     return Image.fromarray(annotated_bgr[:, :, ::-1])  # BGR -> RGB
+
+
+def detect_classes(image: Image.Image):
+    """回傳原始偵測結果 [{"class_name": str, "conf": float, "bbox": [x1,y1,x2,y2]}, ...],
+    給批次腳本(不需要畫框,只要類別/信心值)用,跟 detect_and_draw 共用同一個
+    _yolo_model + KEEP_CLASSES + CONF_THRESH,不重新設計一套。"""
+    results = _yolo_model.predict(source=image, conf=CONF_THRESH, classes=list(KEEP_CLASSES.keys()), verbose=False)
+    r = results[0]
+    dets = []
+    for box in r.boxes:
+        cls_id = int(box.cls.item())
+        dets.append({
+            "class_name": KEEP_CLASSES[cls_id],
+            "conf": round(float(box.conf.item()), 4),
+            "bbox": [round(v, 1) for v in box.xyxy[0].tolist()],
+        })
+    return dets

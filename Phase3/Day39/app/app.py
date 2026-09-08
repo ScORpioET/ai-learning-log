@@ -7,6 +7,7 @@ v1.1 階段二:CPU vs GPU 效能比較模式 -- 開機時嘗試載入GPU FP16 se
 推論確認GPU可用,不是只看 provider 有沒有列在清單裡),成功的話UI改成「同一張圖
 兩條路徑並排」+各自延遲(ms);沒有GPU(或GPU sessions載入/推論失敗)就退回v1的
 單一路徑介面,不會讓沒GPU的機器看到壞掉的按鈕。
+v1.1 階段三:YOLO疊框(見 yolo_overlay.py,沿用既有KEEP_CLASSES/CONF_THRESH設定)。
 
 CPU 跟 GPU 兩份模型都是從 best_model_full_capfix_reweight2x.pt 這同一個checkpoint
 匯出,FP16版本各自都做過cosine similarity sanity check(clip_vision ~0.9999992,
@@ -25,6 +26,7 @@ from PIL import Image
 
 from minbpe import minbpe
 from preprocess import preprocess
+from yolo_overlay import detect_and_draw
 
 HERE = Path(__file__).parent
 MODEL_DIR = HERE.parent  # onnx檔案放在上一層(Day39/)
@@ -97,19 +99,21 @@ def run_generation(image: Image.Image, clip_sess, gpt_sess):
     return caption, elapsed_ms
 
 
-def generate_caption_single(image: Image.Image) -> str:
+def generate_caption_single(image: Image.Image):
     if image is None:
-        return ""
+        return "", None
     caption, _ = run_generation(image, cpu_clip_session, cpu_gpt_session)
-    return caption
+    annotated = detect_and_draw(image)
+    return caption, annotated
 
 
 def generate_caption_compare(image: Image.Image):
     if image is None:
-        return "", "", "", ""
+        return "", "", "", "", None
     cpu_caption, cpu_ms = run_generation(image, cpu_clip_session, cpu_gpt_session)
     gpu_caption, gpu_ms = run_generation(image, gpu_clip_session, gpu_gpt_session)
-    return cpu_caption, f"{cpu_ms:.1f} ms", gpu_caption, f"{gpu_ms:.1f} ms"
+    annotated = detect_and_draw(image)
+    return cpu_caption, f"{cpu_ms:.1f} ms", gpu_caption, f"{gpu_ms:.1f} ms", annotated
 
 
 if GPU_AVAILABLE:
@@ -128,18 +132,19 @@ if GPU_AVAILABLE:
                 gr.Markdown("### GPU FP16")
                 gpu_caption_out = gr.Textbox(label="Caption")
                 gpu_latency_out = gr.Textbox(label="Latency")
+        yolo_out = gr.Image(type="pil", label="YOLO detections")
         run_btn.click(
             fn=generate_caption_compare,
             inputs=[image_in],
-            outputs=[cpu_caption_out, cpu_latency_out, gpu_caption_out, gpu_latency_out],
+            outputs=[cpu_caption_out, cpu_latency_out, gpu_caption_out, gpu_latency_out, yolo_out],
         )
 else:
     demo = gr.Interface(
         fn=generate_caption_single,
         inputs=gr.Image(type="pil", label="Thermal image"),
-        outputs=gr.Textbox(label="Generated caption"),
+        outputs=[gr.Textbox(label="Generated caption"), gr.Image(type="pil", label="YOLO detections")],
         title="Thermal Caption Demo (v1.1, CPU FP32)",
-        description="上傳一張熱像圖片,生成場景描述caption。",
+        description="上傳一張熱像圖片,生成場景描述caption跟YOLO偵測框。",
     )
 
 if __name__ == "__main__":

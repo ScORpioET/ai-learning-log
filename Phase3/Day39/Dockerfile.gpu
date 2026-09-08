@@ -10,6 +10,7 @@ FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 # (避免apt裝的python3-pip目標跟另一個python版本對不上)。
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip \
+    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -28,6 +29,7 @@ COPY gpt.onnx gpt.onnx.data ./
 COPY clip_vision.fp16.onnx clip_vision.fp16.onnx.data ./
 COPY gpt.fp16.onnx gpt.fp16.onnx.data ./
 COPY tokenizer.pkl .
+COPY yolov8m.pt .
 
 WORKDIR /app/app
 EXPOSE 7860

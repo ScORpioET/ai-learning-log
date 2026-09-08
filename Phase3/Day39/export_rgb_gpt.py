@@ -1,16 +1,19 @@
 """
-v1.1 階段四:RGB分支。
+v1.1 階段四:RGB分支。後改版:改用 best_model_rgb_full_capfix_reweight2x.pt
+(跟thermal目前用的capfix版本同一輪修caption-completeness bug後retrain的,
+best epoch 6, val_loss=0.4142),規格對齊thermal分支(thermal也是capfix版本)。
+tokenizer配對已用同一套「重建訓練時tokenizer + 實際生成雙重驗證」方法確認過,
+見 reconstruct_rgb_capfix_tokenizer.py 跟 test_rgb_capfix_tokenizer_pairing.py。
 
 盤點結論:train_vlm.py 訓練時只吃「預先算好的CLIP特徵」(features_train_path:
 clip_features_rgb_train.pt),從頭到尾沒有載入/微調CLIP視覺encoder本身
 (grep過train_vlm.py,沒有任何 clip_model 相關程式碼)。也就是說 clip_vision.onnx
 是domain-agnostic的通用CLIP權重,跟checkpoint(thermal或RGB)無關,RGB分支
 不需要重新export一份clip_vision.onnx,只有 gpt.onnx 這半邊(GPT decoder,
-真正吃caption/domain訓練的部分)需要從 best_model_rgb_full_reweight2x.pt
-重新export。
+真正吃caption/domain訓練的部分)需要重新export。
 
 沿用跟export_capfix.py一樣的邏輯,只是:
-- ckpt換成 best_model_rgb_full_reweight2x.pt
+- ckpt換成 best_model_rgb_full_capfix_reweight2x.pt
 - 只export gpt部分(clip_vision.onnx直接沿用Day39現有那份)
 - 輸出檔名 gpt_rgb.onnx(跟thermal的gpt.onnx分開,不覆蓋)
 """
@@ -27,7 +30,7 @@ from GPT import GPT, GPTConfig  # noqa: E402
 
 device = 'cpu'
 CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
-CKPT_PATH = Path.home() / "ai-transition-2026" / "Phase3" / "Day32" / "checkpoints" / "best_model_rgb_full_reweight2x.pt"
+CKPT_PATH = Path.home() / "ai-transition-2026" / "Phase3" / "Day32" / "checkpoints" / "best_model_rgb_full_capfix_reweight2x.pt"
 HERE = Path(__file__).parent
 SAMPLE_IMAGE = Path.home() / "ai-transition-2026" / "thermal_dataset" / "images_rgb_val" / "data" / "video-CgGWcFRZQwyk48xKp-frame-000150-YbQHWyoYefb5kTX7g.jpg"
 

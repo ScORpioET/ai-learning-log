@@ -11,15 +11,17 @@ v1.1 階段三:YOLO疊框(見 yolo_overlay.py,沿用既有KEEP_CLASSES/CONF_THRE
 v1.1 階段四:RGB分支切換。盤點結論(見 export_rgb_gpt.py 開頭註解):CLIP視覺
 encoder是domain-agnostic的通用預訓練權重,訓練時從沒被微調過(train_vlm.py只吃
 預先算好的CLIP特徵),所以RGB分支不需要另外的clip_vision.onnx,只有gpt_rgb.onnx
-(從best_model_rgb_full_reweight2x.pt匯出)+ tokenizer_rgb.pkl(同一套「重建
-訓練時tokenizer」方法+實際生成驗證,見reconstruct_rgb_tokenizer.py跟
-test_rgb_tokenizer_pairing.py)。RGB目前只有CPU FP32版本,沒有另外做FP16轉換
-(沒被要求也沒驗證過,不要沒驗證就上線),所以RGB選項底下GPU比較欄位會顯示
-「尚無RGB GPU模型」而不是硬套thermal的GPU session。
++ tokenizer_rgb.pkl 各自一份。
+v1.1 階段四(後改版):RGB也補上GPU/FP16路徑,規格對齊thermal。改用
+best_model_rgb_full_capfix_reweight2x.pt(跟thermal同一輪修caption-completeness
+bug後retrain的capfix版本,best epoch 6, val_loss=0.4142,取代原本用的舊版
+best_model_rgb_full_reweight2x.pt),tokenizer配對用同一套「重建訓練時tokenizer +
+實際生成雙重驗證」方法確認過(見reconstruct_rgb_capfix_tokenizer.py跟
+test_rgb_capfix_tokenizer_pairing.py),gpt_rgb.fp16.onnx也做過cosine similarity
+sanity check(~1.0000001)。RGB分支現在跟thermal一樣有Device切換鈕可選GPU。
 
-CPU 跟 GPU 兩份 thermal 模型都是從 best_model_full_capfix_reweight2x.pt 這同一個
-checkpoint匯出,FP16版本各自都做過cosine similarity sanity check(clip_vision
-~0.9999992, gpt ~1.0000001),不是沒驗證就混用精度上線。
+CPU/GPU的thermal跟rgb模型都各自從對應的capfix checkpoint匯出、各自FP16版本都
+做過cosine similarity sanity check,不是沒驗證就混用精度上線。
 """
 import time
 from pathlib import Path
@@ -44,7 +46,7 @@ MAX_NEW_TOKENS = 40
 # 只有gpt(caption decoder)+tokenizer各自domain一份。
 DOMAINS = {
     "thermal": {"gpt_cpu": "gpt.onnx", "gpt_gpu_fp16": "gpt.fp16.onnx", "tokenizer": "tokenizer.pkl"},
-    "rgb": {"gpt_cpu": "gpt_rgb.onnx", "gpt_gpu_fp16": None, "tokenizer": "tokenizer_rgb.pkl"},
+    "rgb": {"gpt_cpu": "gpt_rgb.onnx", "gpt_gpu_fp16": "gpt_rgb.fp16.onnx", "tokenizer": "tokenizer_rgb.pkl"},
 }
 
 tokenizers = {name: minbpe.load(str(MODEL_DIR / cfg["tokenizer"])) for name, cfg in DOMAINS.items()}

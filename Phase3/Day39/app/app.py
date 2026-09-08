@@ -155,7 +155,7 @@ with gr.Blocks(title="Thermal Caption Demo (v1.1)") as demo:
             device_in = gr.Radio(["gpu", "cpu"], value="gpu", label="Device")
         else:
             device_in = gr.State("cpu")
-    image_in = gr.Image(type="pil", label="Input image")
+    image_in = gr.Image(type="pil", label="Input image", sources=["upload"])
     run_btn = gr.Button("Generate", variant="primary")
     caption_out = gr.Textbox(label="Generated caption")
     latency_out = gr.Textbox(label="Latency")

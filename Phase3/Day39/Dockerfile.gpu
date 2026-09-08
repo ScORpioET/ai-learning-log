@@ -22,11 +22,13 @@ RUN pip3 install --no-cache-dir -r requirements-gpu.txt
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cublas/lib:${LD_LIBRARY_PATH}
 
 COPY app/ ./app/
+# v1.1階段二(CPU vs GPU比較)兩條路徑都要能跑,FP32/FP16兩組都要COPY進來。
+COPY clip_vision.onnx clip_vision.onnx.data ./
+COPY gpt.onnx gpt.onnx.data ./
 COPY clip_vision.fp16.onnx clip_vision.fp16.onnx.data ./
 COPY gpt.fp16.onnx gpt.fp16.onnx.data ./
 COPY tokenizer.pkl .
 
-ENV DEVICE_MODE=gpu
 WORKDIR /app/app
 EXPOSE 7860
 

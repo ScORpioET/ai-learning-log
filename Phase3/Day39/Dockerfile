@@ -19,6 +19,10 @@ COPY clip_vision.onnx clip_vision.onnx.data ./
 COPY gpt.onnx gpt.onnx.data ./
 COPY tokenizer.pkl .
 COPY yolov8m.pt .
+# v1.1階段四:RGB分支。clip_vision.onnx是domain-agnostic的通用CLIP,thermal/rgb共用,
+# 只有gpt(caption decoder)+tokenizer各自一份。
+COPY gpt_rgb.onnx gpt_rgb.onnx.data ./
+COPY tokenizer_rgb.pkl .
 
 WORKDIR /app/app
 EXPOSE 7860

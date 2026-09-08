@@ -3,10 +3,10 @@ Thermal caption demo。
 
 v1(CPU FP32): onnxruntime(CPUExecutionProvider),不依賴PyTorch。
 v1.1 階段一:GPU/FP16路徑(DEVICE_MODE=gpu 時預設走 CUDAExecutionProvider+FP16)。
-v1.1 階段二:CPU vs GPU 效能比較模式 -- 開機時嘗試載入GPU FP16 sessions(真的跑一次
-推論確認GPU可用,不是只看 provider 有沒有列在清單裡),成功的話UI改成「同一張圖
-兩條路徑並排」+各自延遲(ms);沒有GPU(或GPU sessions載入/推論失敗)就退回v1的
-單一路徑介面,不會讓沒GPU的機器看到壞掉的按鈕。
+v1.1 階段二(後改版):CPU/GPU 用切換式(不是並排比較)。開機時嘗試載入GPU FP16
+sessions(真的跑一次推論確認GPU可用,不是只看provider有沒有列在清單裡),有GPU
+才會出現Device切換鈕,預設選GPU;沒有GPU(或GPU sessions載入/推論失敗)的機器
+直接不出現這個切換鈕,只能用CPU,不會讓使用者切到一個壞掉的GPU選項。
 v1.1 階段三:YOLO疊框(見 yolo_overlay.py,沿用既有KEEP_CLASSES/CONF_THRESH設定)。
 v1.1 階段四:RGB分支切換。盤點結論(見 export_rgb_gpt.py 開頭註解):CLIP視覺
 encoder是domain-agnostic的通用預訓練權重,訓練時從沒被微調過(train_vlm.py只吃
@@ -121,64 +121,47 @@ def run_generation(image: Image.Image, clip_sess, gpt_sess, tokenizer):
     return caption, elapsed_ms
 
 
-def generate_caption_single(image: Image.Image, domain: str):
+def generate_caption(image: Image.Image, domain: str, device: str):
     if image is None:
-        return "", None
-    clip_sess, gpt_sess = load_cpu_sessions(domain)
-    caption, _ = run_generation(image, clip_sess, gpt_sess, tokenizers[domain])
-    annotated = detect_and_draw(image)
-    return caption, annotated
+        return "", "", None
 
-
-def generate_caption_compare(image: Image.Image, domain: str):
-    if image is None:
-        return "", "", "", "", None
-    clip_cpu, gpt_cpu = load_cpu_sessions(domain)
-    cpu_caption, cpu_ms = run_generation(image, clip_cpu, gpt_cpu, tokenizers[domain])
-
-    gpu_sess = get_gpu_sessions(domain)
-    if gpu_sess is None:
-        gpu_caption, gpu_ms_label = "(尚無此分支的GPU FP16模型)", "N/A"
+    used_device = device
+    if device == "gpu":
+        gpu_sess = get_gpu_sessions(domain)
+        if gpu_sess is None:
+            # 這個domain沒有GPU模型(目前只有thermal轉過FP16)-> 自動退回CPU,
+            # 不要假裝跑了GPU或直接壞掉。
+            clip_sess, gpt_sess = load_cpu_sessions(domain)
+            used_device = "cpu (此分支尚無GPU模型,已自動改用CPU)"
+        else:
+            clip_sess, gpt_sess = gpu_sess
     else:
-        gpu_clip, gpu_gpt = gpu_sess
-        gpu_caption, gpu_ms = run_generation(image, gpu_clip, gpu_gpt, tokenizers[domain])
-        gpu_ms_label = f"{gpu_ms:.1f} ms"
+        clip_sess, gpt_sess = load_cpu_sessions(domain)
 
+    caption, elapsed_ms = run_generation(image, clip_sess, gpt_sess, tokenizers[domain])
     annotated = detect_and_draw(image)
-    return cpu_caption, f"{cpu_ms:.1f} ms", gpu_caption, gpu_ms_label, annotated
+    return caption, f"{elapsed_ms:.1f} ms  ({used_device})", annotated
 
 
-if GPU_AVAILABLE:
-    with gr.Blocks(title="Thermal Caption Demo (v1.1, CPU vs GPU)") as demo:
-        gr.Markdown("# Thermal Caption Demo (v1.1)\n"
-                    "偵測到GPU可用,同一張圖會同時跑 **CPU FP32** 跟 **GPU FP16** 兩條路徑,並排比較延遲。"
-                    "選RGB時,GPU那欄會顯示尚無GPU模型(目前只有thermal轉過FP16)。")
+with gr.Blocks(title="Thermal Caption Demo (v1.1)") as demo:
+    gr.Markdown("# Thermal Caption Demo (v1.1)")
+    with gr.Row():
         domain_in = gr.Radio(list(DOMAINS.keys()), value="thermal", label="Domain")
-        with gr.Row():
-            image_in = gr.Image(type="pil", label="Input image")
-        run_btn = gr.Button("Generate", variant="primary")
-        with gr.Row():
-            with gr.Column():
-                gr.Markdown("### CPU FP32")
-                cpu_caption_out = gr.Textbox(label="Caption")
-                cpu_latency_out = gr.Textbox(label="Latency")
-            with gr.Column():
-                gr.Markdown("### GPU FP16")
-                gpu_caption_out = gr.Textbox(label="Caption")
-                gpu_latency_out = gr.Textbox(label="Latency")
-        yolo_out = gr.Image(type="pil", label="YOLO detections")
-        run_btn.click(
-            fn=generate_caption_compare,
-            inputs=[image_in, domain_in],
-            outputs=[cpu_caption_out, cpu_latency_out, gpu_caption_out, gpu_latency_out, yolo_out],
-        )
-else:
-    demo = gr.Interface(
-        fn=generate_caption_single,
-        inputs=[gr.Image(type="pil", label="Input image"), gr.Radio(list(DOMAINS.keys()), value="thermal", label="Domain")],
-        outputs=[gr.Textbox(label="Generated caption"), gr.Image(type="pil", label="YOLO detections")],
-        title="Thermal Caption Demo (v1.1, CPU FP32)",
-        description="上傳一張圖片(thermal或RGB),生成場景描述caption跟YOLO偵測框。",
+        if GPU_AVAILABLE:
+            # 只有偵測到GPU可用才出現這個切換鈕,預設選GPU;沒GPU的機器完全不會看到它,
+            # 不可能切到一個壞掉的選項。
+            device_in = gr.Radio(["gpu", "cpu"], value="gpu", label="Device")
+        else:
+            device_in = gr.State("cpu")
+    image_in = gr.Image(type="pil", label="Input image")
+    run_btn = gr.Button("Generate", variant="primary")
+    caption_out = gr.Textbox(label="Generated caption")
+    latency_out = gr.Textbox(label="Latency")
+    yolo_out = gr.Image(type="pil", label="YOLO detections")
+    run_btn.click(
+        fn=generate_caption,
+        inputs=[image_in, domain_in, device_in],
+        outputs=[caption_out, latency_out, yolo_out],
     )
 
 if __name__ == "__main__":

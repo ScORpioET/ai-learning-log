@@ -1,0 +1,3 @@
+/home/jack/ai-transition-2026/cpp_practice/Day44/build/CMakeFiles/Sensor_main.dir
+/home/jack/ai-transition-2026/cpp_practice/Day44/build/CMakeFiles/edit_cache.dir
+/home/jack/ai-transition-2026/cpp_practice/Day44/build/CMakeFiles/rebuild_cache.dir

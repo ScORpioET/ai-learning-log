@@ -20,6 +20,13 @@ best_model_rgb_full_reweight2x.pt),tokenizer配對用同一套「重建訓練時
 test_rgb_capfix_tokenizer_pairing.py),gpt_rgb.fp16.onnx也做過cosine similarity
 sanity check(~1.0000001)。RGB分支現在跟thermal一樣有Device切換鈕可選GPU。
 
+v1.2:拿掉手動選thermal/RGB分支的下拉選單,改成上傳圖片後自動判斷(見
+domain_detect.py,門檻/驗證方法見Phase3/domain_autodetect_check/REPORT.md)。
+自動判斷不是100%保證正確(它驗證的是「這個資料集的檔案儲存慣例」,不是任意
+輸入圖片畫面內容本質上是不是灰階),所以保留一個不顯眼的手動覆蓋選項
+(進階選項的Accordion裡,預設"auto"跟隨自動判斷,誤判時使用者可以自己切換)
+當安全網,平常不需要用到。
+
 CPU/GPU的thermal跟rgb模型都各自從對應的capfix checkpoint匯出、各自FP16版本都
 做過cosine similarity sanity check,不是沒驗證就混用精度上線。
 """
@@ -34,6 +41,7 @@ from PIL import Image
 from minbpe import minbpe
 from preprocess import preprocess
 from yolo_overlay import detect_and_draw
+from domain_detect import detect_domain
 
 HERE = Path(__file__).parent
 MODEL_DIR = HERE.parent  # onnx檔案放在上一層(Day39/)
@@ -123,9 +131,36 @@ def run_generation(image: Image.Image, clip_sess, gpt_sess, tokenizer):
     return caption, elapsed_ms
 
 
-def generate_caption(image: Image.Image, domain: str, device: str):
+def resolve_domain(image: Image.Image, override: str) -> tuple[str, str]:
+    """回傳 (detected, resolved)。detected是自動判斷結果(不受override影響,
+    純粹給使用者看系統偵測到什麼),resolved是實際要拿去生成用的domain
+    (override="auto"時等於detected,否則是使用者手動指定的值)。"""
+    detected = detect_domain(image)
+    resolved = detected if override == "auto" else override
+    return detected, resolved
+
+
+def format_detected_label(detected: str) -> str:
+    label = "Thermal" if detected == "thermal" else "RGB"
+    return f"偵測為:{label}"
+
+
+def preview_detected_domain(image: Image.Image):
+    """上傳圖片(或清空)時觸發,只更新偵測結果顯示,不跑生成。"""
     if image is None:
-        return "", "", None
+        return ""
+    detected, _ = resolve_domain(image, "auto")
+    return format_detected_label(detected)
+
+
+def generate_caption(image: Image.Image, override: str, device: str):
+    if image is None:
+        return "", "", None, ""
+
+    detected, domain = resolve_domain(image, override)
+    detected_label = format_detected_label(detected)
+    if override != "auto" and override != detected:
+        detected_label += f"(已手動覆蓋為 {('Thermal' if domain == 'thermal' else 'RGB')})"
 
     used_device = device
     if device == "gpu":
@@ -142,13 +177,12 @@ def generate_caption(image: Image.Image, domain: str, device: str):
 
     caption, elapsed_ms = run_generation(image, clip_sess, gpt_sess, tokenizers[domain])
     annotated = detect_and_draw(image)
-    return caption, f"{elapsed_ms:.1f} ms  ({used_device})", annotated
+    return caption, f"{elapsed_ms:.1f} ms  ({used_device})", annotated, detected_label
 
 
 with gr.Blocks(title="Thermal Caption Demo (v1.0)") as demo:
     gr.Markdown("# Thermal Caption Demo (v1.0)")
     with gr.Row():
-        domain_in = gr.Radio(list(DOMAINS.keys()), value="thermal", label="Domain")
         if GPU_AVAILABLE:
             # 只有偵測到GPU可用才出現這個切換鈕,預設選GPU;沒GPU的機器完全不會看到它,
             # 不可能切到一個壞掉的選項。
@@ -156,14 +190,25 @@ with gr.Blocks(title="Thermal Caption Demo (v1.0)") as demo:
         else:
             device_in = gr.State("cpu")
     image_in = gr.Image(type="pil", label="Input image", sources=["upload"])
+    detected_out = gr.Markdown("")
+    with gr.Accordion("進階選項 / Advanced", open=False):
+        gr.Markdown(
+            "系統會自動判斷上傳的是thermal還是RGB圖片,不需要手動選擇。"
+            "如果判斷結果看起來不對,可以在這裡手動覆蓋(平常不需要用到)。"
+        )
+        override_in = gr.Radio(
+            ["auto"] + list(DOMAINS.keys()), value="auto", label="Domain override"
+        )
     run_btn = gr.Button("Generate", variant="primary")
     caption_out = gr.Textbox(label="Generated caption")
     latency_out = gr.Textbox(label="Latency")
     yolo_out = gr.Image(type="pil", label="YOLO detections")
+
+    image_in.change(fn=preview_detected_domain, inputs=[image_in], outputs=[detected_out])
     run_btn.click(
         fn=generate_caption,
-        inputs=[image_in, domain_in, device_in],
-        outputs=[caption_out, latency_out, yolo_out],
+        inputs=[image_in, override_in, device_in],
+        outputs=[caption_out, latency_out, yolo_out, detected_out],
     )
 
 if __name__ == "__main__":
